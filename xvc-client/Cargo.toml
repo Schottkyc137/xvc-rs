@@ -1,0 +1,13 @@
+[package]
+name = "xvc-client"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+categories = ["api-bindings"]
+description = "Library for connecting to Xilinx Virtual Cable (XVC) servers and performing remote JTAG operations"
+
+[dependencies]
+xvc-protocol = { version = "0.1.0", path = "../xvc-protocol" }

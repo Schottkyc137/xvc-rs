@@ -1,0 +1,12 @@
+[package]
+name = "xvc-protocol"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+categories = ["api-bindings"]
+description = "Implementation of the Xilinx Virtual Cable (XVC) 1.0 protocol for JTAG communication with FPGA devices over network connections"
+
+[dependencies]

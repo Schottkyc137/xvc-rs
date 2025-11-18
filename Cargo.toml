@@ -1,0 +1,10 @@
+[workspace]
+members = [ "xvc-client", "xvc-protocol","xvc-server", "xvc-server-debugbridge"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+authors = ["Lukas Scheller"]
+license = "MIT"
+rust-version = "1.91"
+repository = "https://github.com/Schottkyc137/xvc-rs"

@@ -17,7 +17,8 @@ use std::{
     io,
     num::NonZero,
     path::Path,
-    ptr::{NonNull, read_volatile, write_volatile}, time::{Duration, Instant},
+    ptr::{NonNull, read_volatile, write_volatile},
+    time::{Duration, Instant},
 };
 
 use nix::sys::mman::{MapFlags, ProtFlags, mmap, munmap};
@@ -37,7 +38,7 @@ pub struct UioDriverBackend {
     jtag: *mut u32,
     /// The driver must poll the Debug Bridge since there are no interrupt lines.
     /// This timeout defines how long a poll may take before issuing a timeout error.
-    poll_timeout: Duration
+    poll_timeout: Duration,
 }
 
 fn u32_from_u8_slice(slice: &[u8]) -> u32 {
@@ -134,7 +135,10 @@ impl UioDriverBackend {
                             return Ok(());
                         }
                     }
-                    return Err(io::Error::new(io::ErrorKind::TimedOut, "Timed out while waiting for JTAG response"))
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "Timed out while waiting for JTAG response",
+                    ));
                 };
                 poll_until_ready()?;
 

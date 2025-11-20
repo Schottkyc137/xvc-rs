@@ -13,6 +13,7 @@ pub mod backends;
 use std::error::Error;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use clap::Parser;
 use env_logger::Env;
@@ -21,10 +22,23 @@ use xvc_server::{
     server::{Config, Server},
 };
 
+const DEFAULT_TIMEOUT_US: u64 = 1000;
+
 #[derive(Parser, Eq, PartialEq, Clone)]
 enum DeviceImpl {
-    KernelDriver { path: Option<PathBuf> },
-    UioDriver { path: Option<PathBuf> },
+    KernelDriver {
+        path: Option<PathBuf>,
+    },
+    UioDriver {
+        path: Option<PathBuf>,
+        #[arg(
+            short,
+            long,
+            help = "The timeout in microseconds",
+            default_value = "1000"
+        )]
+        poll_timeout_us: u64,
+    },
 }
 
 #[derive(Parser)]
@@ -92,7 +106,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             Some(DeviceImpl::KernelDriver { path: Some(path) })
         } else if let Some(path) = uio_driver_path() {
             log::info!("Auto-detected UIO driver at {}", path.display());
-            Some(DeviceImpl::UioDriver { path: Some(path) })
+            Some(DeviceImpl::UioDriver {
+                path: Some(path),
+                poll_timeout_us: DEFAULT_TIMEOUT_US,
+            })
         } else {
             None
         }
@@ -119,7 +136,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             let server = Server::new(KernelDriverBackend::new(device_path)?, config);
             server.listen(addr)?
         }
-        Some(DeviceImpl::UioDriver { path }) => {
+        Some(DeviceImpl::UioDriver {
+            path,
+            poll_timeout_us,
+        }) => {
             use crate::backends::uio::UioDriverBackend;
 
             let uio_path = match path.or(uio_driver_path()) {
@@ -133,7 +153,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             };
 
             log::info!("Initializing UIO driver server from {}", uio_path.display());
-            let server = Server::new(UioDriverBackend::new(uio_path)?, config);
+            let server = Server::new(
+                UioDriverBackend::new(uio_path, Duration::from_micros(poll_timeout_us))?,
+                config,
+            );
             server.listen(addr)?;
         }
         None => {

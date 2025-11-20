@@ -17,7 +17,7 @@ use std::{
     io,
     num::NonZero,
     path::Path,
-    ptr::{NonNull, read_volatile, write_volatile},
+    ptr::{NonNull, read_volatile, write_volatile}, time::{Duration, Instant},
 };
 
 use nix::sys::mman::{MapFlags, ProtFlags, mmap, munmap};
@@ -35,6 +35,9 @@ const MAP_SIZE: usize = 0x10000;
 /// Debug bridge driver based on a Uio device
 pub struct UioDriverBackend {
     jtag: *mut u32,
+    /// The driver must poll the Debug Bridge since there are no interrupt lines.
+    /// This timeout defines how long a poll may take before issuing a timeout error.
+    poll_timeout: Duration
 }
 
 fn u32_from_u8_slice(slice: &[u8]) -> u32 {
@@ -45,7 +48,7 @@ fn u32_from_u8_slice(slice: &[u8]) -> u32 {
 }
 
 impl UioDriverBackend {
-    pub fn new(path: impl AsRef<Path>) -> io::Result<UioDriverBackend> {
+    pub fn new(path: impl AsRef<Path>, poll_timeout: Duration) -> io::Result<UioDriverBackend> {
         let device_path = path.as_ref();
         log::debug!("Opening UIO device: {}", device_path.display());
         let file = OpenOptions::new().read(true).write(true).open(path)?;
@@ -64,7 +67,7 @@ impl UioDriverBackend {
             log::info!("UIO memory mapped successfully");
             ptr.as_ptr() as *mut u32
         };
-        Ok(UioDriverBackend { jtag })
+        Ok(UioDriverBackend { jtag, poll_timeout })
     }
 
     // Note this is an adapted version of the Xilinx driver
@@ -124,8 +127,16 @@ impl UioDriverBackend {
                 );
                 write_volatile(self.jtag.add(CONTROL_REG_OFFSET / 4), 0x01);
 
-                /* TODO: Switch this to interrupt at some point */
-                while read_volatile(self.jtag.add(CONTROL_REG_OFFSET / 4)) != 0 {}
+                let poll_until_ready = || {
+                    let start = Instant::now();
+                    while start.elapsed() < self.poll_timeout {
+                        if read_volatile(self.jtag.add(CONTROL_REG_OFFSET / 4)) == 0 {
+                            return Ok(());
+                        }
+                    }
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "Timed out while waiting for JTAG response"))
+                };
+                poll_until_ready()?;
 
                 &read_volatile(self.jtag.add(TDO_REG_OFFSET / 4)).to_ne_bytes()
                     [..shift_num_bytes as usize]

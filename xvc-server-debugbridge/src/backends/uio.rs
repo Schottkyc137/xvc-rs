@@ -135,10 +135,10 @@ impl UioDriverBackend {
                             return Ok(());
                         }
                     }
-                    return Err(io::Error::new(
+                    Err(io::Error::new(
                         io::ErrorKind::TimedOut,
                         "Timed out while waiting for JTAG response",
-                    ));
+                    ))
                 };
                 poll_until_ready()?;
 

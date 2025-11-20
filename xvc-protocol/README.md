@@ -19,7 +19,7 @@ use xvc_protocol::{Message, XvcInfo};
 use std::io::Cursor;
 
 // Parse server capabilities
-let response = b"xvcServer_v1.0:\x00\x00\xA0\x00\n";
+let response = b"xvcServer_v1.0:32\n";
 let mut reader = Cursor::new(response);
 let info = XvcInfo::from_reader(&mut reader)?;
 

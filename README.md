@@ -96,11 +96,14 @@ server.listen(addr)?;
 ### Command-line Server
 
 ```bash
+# Start the server and let the tool choose the backend
+xvc-bridge --ip <IP>
+
 # Start with ioctl driver
-xvc-server-debugbridge --device kernel-driver
+xvc-bridge kernel-driver
 
 # Start with UIO driver
-RUST_LOG=debug xvc-server-debugbridge --device uio-driver
+RUST_LOG=debug xvc-bridge uio-driver
 ```
 
 ## Project Structure

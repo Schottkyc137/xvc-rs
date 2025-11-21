@@ -12,9 +12,9 @@ jobs:
 
       - name: Test
         run: cargo test --all-features
-      
+
       - name: format
         run: cargo fmt --check
-      
+
       - name: clippy
         run: cargo clippy --all-features -- -D warnings

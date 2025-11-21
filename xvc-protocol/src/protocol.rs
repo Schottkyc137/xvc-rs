@@ -84,7 +84,7 @@ fn incorrect_version_from_str() {
     }
 }
 
-/// A Message is transfered from the client to the server.
+/// A Message is transferred from the client to the server.
 /// For each message, the client is expected to send the message and wait for a response from the server.
 /// The server needs to process each message in the order received and promptly provide a response.
 /// For the XVC 1.0 protocol, only one connection is assumed.
@@ -92,7 +92,7 @@ fn incorrect_version_from_str() {
 pub enum Message {
     /// Requests info from the server. This is used to determine protocol capabilities of the server.
     GetInfo,
-    /// Configures the TCK period. When sending JTAG vectors the TCK rate may need to be varied to accomodate cable and board signal integrity conditions.
+    /// Configures the TCK period. When sending JTAG vectors the TCK rate may need to be varied to accommodate cable and board signal integrity conditions.
     /// This command is used by clients to adjust the TCK rate in order to slow down or speed up the shifting of JTAG vectors.
     SetTck { period_ns: u32 },
     /// Used to shift JTAG vectors in-and out of a device.
@@ -108,7 +108,7 @@ pub enum Message {
     },
 }
 
-/// Contains static information about the server capabilities that are transfered between
+/// Contains static information about the server capabilities that are transferred between
 /// client and server in the beginning.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct XvcInfo {

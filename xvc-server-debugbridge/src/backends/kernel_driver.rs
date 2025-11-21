@@ -119,7 +119,7 @@ impl KernelDriverBackend {
 
     /// Transfers JTAG data.
     /// `num_bits / 8`, rounded up must be the same length as `tms` and `tdi`.
-    /// The returned result, if successfull, will also be of that size.
+    /// The returned result, if successful, will also be of that size.
     pub fn shift_data(&self, num_bits: u32, tms: &[u8], tdi: &[u8]) -> io::Result<Box<[u8]>> {
         let num_bytes = num_bits.div_ceil(8) as usize;
         if tms.len() != num_bytes {

@@ -30,13 +30,13 @@ pub struct Server<T: XvcServer> {
 }
 
 /// Builder to create a [Server] instance and modify configuration options
-/// 
+///
 /// # Example
-/// 
+///
 /// ```ignore
 /// use xvc_server::server::Builder;
 /// use std::time::Duration;
-/// 
+///
 /// let server = Builder::new()
 ///     .max_vector_size(1024)
 ///     .rw_timeout(Duration::from_secs(20))

@@ -29,6 +29,47 @@ pub struct Server<T: XvcServer> {
     config: Config,
 }
 
+/// Builder to create a [Server] instance and modify configuration options
+/// 
+/// # Example
+/// 
+/// ```ignore
+/// use xvc_server::server::Builder;
+/// use std::time::Duration;
+/// 
+/// let server = Builder::new()
+///     .max_vector_size(1024)
+///     .rw_timeout(Duration::from_secs(20))
+///     .build(my_server);
+/// ```
+#[derive(Default)]
+pub struct Builder {
+    config: Config,
+}
+
+impl Builder {
+    pub fn new() -> Builder {
+        Builder::default()
+    }
+
+    /// Set the highest vector size that this server is expected to receive.
+    pub fn max_vector_size(mut self, size: u32) -> Self {
+        self.config.max_vector_size = size;
+        self
+    }
+
+    /// Set the TCP read and write timeout
+    pub fn rw_timeout(mut self, timeout: Duration) -> Self {
+        self.config.read_write_timeout = timeout;
+        self
+    }
+
+    /// Build and return the server
+    pub fn build<T: XvcServer>(self, server: T) -> Server<T> {
+        Server::new(server, self.config)
+    }
+}
+
 impl<T: XvcServer> Server<T> {
     pub fn new(server: T, config: Config) -> Server<T> {
         Server { server, config }

@@ -238,7 +238,7 @@ mod test {
     #[test]
     fn read_shift() {
         let num_bits: u32 = 13; // 2 bytes
-        let num_bytes = ((num_bits + 7) / 8) as usize;
+        let num_bytes = num_bits.div_ceil(8) as usize;
         let tms = vec![0xAAu8; num_bytes];
         let tdi = vec![0x55u8; num_bytes];
 
@@ -265,7 +265,7 @@ mod test {
     #[test]
     fn write_shift() {
         let num_bits: u32 = 13; // 2 bytes
-        let num_bytes = ((num_bits + 7) / 8) as usize;
+        let num_bytes = num_bits.div_ceil(8) as usize;
         let tms = vec![0xAAu8; num_bytes].into_boxed_slice();
         let tdi = vec![0x55u8; num_bytes].into_boxed_slice();
 
@@ -279,8 +279,8 @@ mod test {
 
         let mut expected = b"shift:".to_vec();
         expected.extend_from_slice(&num_bits.to_le_bytes());
-        expected.extend_from_slice(&*tms);
-        expected.extend_from_slice(&*tdi);
+        expected.extend_from_slice(&tms);
+        expected.extend_from_slice(&tdi);
 
         assert_eq!(out, expected);
     }

@@ -1,4 +1,6 @@
-use std::fmt::Display;
+use std::{fmt::Display, str::FromStr};
+
+use crate::error::ParseVersionError;
 
 /// The version of the protocol.
 /// A version always consists of a major and a minor part.
@@ -11,6 +13,11 @@ pub struct Version {
 impl Version {
     /// Version 1.0 of the protocol
     pub const V1_0: Version = Version { major: 1, minor: 0 };
+
+    /// Create a new version from major and minor components
+    pub fn new(major: usize, minor: usize) -> Version {
+        Version { major, minor }
+    }
 
     /// Returns the latest supported version
     pub fn latest() -> Version {
@@ -43,6 +50,37 @@ impl Default for Version {
 impl Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}.{}", self.major, self.minor)
+    }
+}
+
+impl FromStr for Version {
+    type Err = ParseVersionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (major_part, minor_part) = s.split_once(".").ok_or(ParseVersionError::MissingDot)?;
+        let major: usize = major_part.parse::<usize>()?;
+        let minor: usize = minor_part.parse::<usize>()?;
+        Ok(Self { major, minor })
+    }
+}
+
+#[test]
+fn correct_version_from_str() {
+    assert_eq!(Version::from_str("1.0").unwrap(), Version::new(1, 0));
+    assert_eq!(Version::from_str("2.0").unwrap(), Version::new(2, 0));
+    assert_eq!(Version::from_str("2.20").unwrap(), Version::new(2, 20));
+}
+
+#[test]
+fn incorrect_version_from_str() {
+    assert!(matches!(
+        Version::from_str("1"),
+        Err(ParseVersionError::MissingDot)
+    ));
+    match Version::from_str("1.1.1") {
+        Err(ParseVersionError::ParseInt(_)) => {}
+        Ok(_) => panic!("'1.1.1' should not be a valid version"),
+        Err(_) => panic!("'1.1.1' should raise ParseIntError"),
     }
 }
 

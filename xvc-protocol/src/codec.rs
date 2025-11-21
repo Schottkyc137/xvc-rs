@@ -53,15 +53,7 @@ impl XvcInfo {
         })?;
 
         let (version_part, rest) = line.split_at(colon_index);
-
-        let version = match version_part {
-            b"1.0" => Version::V1_0,
-            _ => {
-                return Err(ReadError::UnsupportedVersion(
-                    String::from_utf8_lossy(version_part).to_string(),
-                ));
-            }
-        };
+        let version = str::from_utf8(version_part)?.parse::<Version>()?;
 
         let max_vector_len = str::from_utf8(&rest[1..])?.parse::<u32>()?;
 

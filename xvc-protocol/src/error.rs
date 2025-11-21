@@ -12,7 +12,6 @@ pub enum ReadError {
     IoError(io::Error),
     InvalidCommand(String),
     InvalidCommandPrefix(String),
-    UnsupportedVersion(String),
     InvalidFormat(String),
     TooManyBytes { max: usize, got: usize },
 }
@@ -35,12 +34,17 @@ impl From<ParseIntError> for ReadError {
     }
 }
 
+impl From<ParseVersionError> for ReadError {
+    fn from(value: ParseVersionError) -> Self {
+        Self::InvalidFormat(format!("{}", value))
+    }
+}
+
 impl Display for ReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ReadError::IoError(error) => write!(f, "{}", error),
             ReadError::InvalidCommand(cmd) => write!(f, "Received invalid command {}", cmd),
-            ReadError::UnsupportedVersion(version) => write!(f, "Unsupported version {}", version),
             ReadError::InvalidFormat(format) => write!(f, "{}", format),
             ReadError::InvalidCommandPrefix(prefix) => {
                 write!(f, "Received invalid command with prefix {}", prefix)
@@ -53,3 +57,27 @@ impl Display for ReadError {
 }
 
 impl Error for ReadError {}
+
+/// Errors that may occur when parsing a Version.
+#[derive(Debug)]
+pub enum ParseVersionError {
+    MissingDot,
+    ParseInt(ParseIntError),
+}
+
+impl From<ParseIntError> for ParseVersionError {
+    fn from(value: ParseIntError) -> Self {
+        ParseVersionError::ParseInt(value)
+    }
+}
+
+impl Display for ParseVersionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseVersionError::MissingDot => write!(f, "Missing dot in version"),
+            ParseVersionError::ParseInt(parse_err) => write!(f, "{}", parse_err),
+        }
+    }
+}
+
+impl Error for ParseVersionError {}

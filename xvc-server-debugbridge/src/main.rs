@@ -42,7 +42,7 @@ enum DeviceImpl {
 }
 
 #[derive(Parser)]
-#[command(about = "Xilinx Virtual Cable (XVC) JTAG interface for ZynqMP", long_about=None)]
+#[command(about = "Xilinx Virtual Cable (XVC) JTAG interface for ZynqMP", long_about=None, version)]
 struct Args {
     #[arg(short, long, default_value = "2542")]
     port: u16,

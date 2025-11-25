@@ -7,6 +7,7 @@ A Rust implementation of the [Xilinx Virtual Cable (XVC) 1.0 protocol](https://g
 - **Protocol Implementation**: Full XVC 1.0 support with message serialization/deserialization
 - **Error Handling**: Robust parsing with detailed error reporting
 - **Type Safety**: Leverages Rust's type system for protocol correctness
+- **`no_std`**: Crate can be built without the standard library
 
 ## Usage
 

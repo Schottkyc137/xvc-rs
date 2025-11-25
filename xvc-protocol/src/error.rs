@@ -1,9 +1,11 @@
 use std::{
     error::Error,
     fmt::Display,
+    format,
     io::{self},
     num::ParseIntError,
     str::Utf8Error,
+    string::String,
 };
 
 /// Errors that may occur when reading a message from a stream.
@@ -59,7 +61,7 @@ impl Display for ReadError {
 impl Error for ReadError {}
 
 /// Errors that may occur when parsing a Version.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum ParseVersionError {
     MissingDot,
     ParseInt(ParseIntError),

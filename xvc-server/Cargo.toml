@@ -11,4 +11,4 @@ description = "Library for implementing Xilinx Virtual Cable (XVC) servers that 
 
 [dependencies]
 log = "0.4.28"
-xvc-protocol = { version = "0.1.0", path = "../xvc-protocol" }
+xvc-protocol = { version = "0.1.0", path = "../xvc-protocol", features = ["std"]}

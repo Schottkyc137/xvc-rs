@@ -83,8 +83,15 @@
 //!
 //! The types in this library are thread-safe and can be safely shared across threads.
 //! However, I/O operations (reading/writing) are not synchronized and require external coordination.
+#![no_std]
 
 pub mod protocol;
 pub use protocol::*;
 pub mod codec;
+
+#[cfg(feature = "std")]
+extern crate std;
+#[cfg(feature = "std")]
 pub mod error;
+#[cfg(feature = "std")]
+pub mod rw;

@@ -22,7 +22,7 @@ impl XvcInfo {
         let colon_index = buf
             .iter()
             .position(|byte| *byte == b':')
-            .ok_or_else(|| ParseErr::InvalidCommand(buf))?;
+            .ok_or(ParseErr::InvalidCommand(buf))?;
         let (version_buf, buf) = buf.split_at(colon_index);
         let version = str::from_utf8(version_buf)?.parse::<Version>()?;
         let max_vector_len = str::from_utf8(&buf[1..])?.parse::<u32>()?;

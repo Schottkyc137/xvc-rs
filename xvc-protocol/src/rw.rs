@@ -1,4 +1,3 @@
-use core::result;
 /// Read and write implementations for the protocol messages
 use std::{
     io::{self, BufRead, BufReader, Read, Write},
@@ -7,7 +6,7 @@ use std::{
     vec::Vec,
 };
 
-use crate::{Message, Version, XvcCommand, XvcInfo, codec::ParseErr, error::ReadError};
+use crate::{Message, Version, XvcInfo, error::ReadError};
 
 const XVC_INFO_PREFIX: &[u8] = b"xvcServer";
 

@@ -144,3 +144,10 @@ impl Default for XvcInfo {
         }
     }
 }
+
+#[derive(Eq, PartialEq, Clone, Debug)]
+pub enum XvcCommand {
+    GetInfo,
+    SetTck,
+    Shift
+}

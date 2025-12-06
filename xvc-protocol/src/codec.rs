@@ -14,7 +14,7 @@ impl XvcInfo {
             // TODO: could also be error (command is not valid)
             return Err(ParseErr::Incomplete);
         };
-        let (mut buf, rest) = buf.split_at(pos);
+        let mut buf = &buf[..pos];
         if !buf.starts_with(XVC_SERVER_PREFIX) {
             return Err(ParseErr::InvalidCommand(buf));
         }
@@ -26,19 +26,22 @@ impl XvcInfo {
         let (version_buf, buf) = buf.split_at(colon_index);
         let version = str::from_utf8(version_buf)?.parse::<Version>()?;
         let max_vector_len = str::from_utf8(&buf[1..])?.parse::<u32>()?;
-        Ok((XvcInfo::new(version, max_vector_len), &rest[1..]))
+        Ok((XvcInfo::new(version, max_vector_len), pos))
     }
 }
 
 #[test]
 fn parses_valid_xvc_info() {
+    let info1 = b"xvcServer_v1.0:4\n";
     assert_eq!(
-        XvcInfo::parse(b"xvcServer_v1.0:4\n"),
-        Ok((XvcInfo::new(Version::new(1, 0), 4), &[] as &[u8]))
+        XvcInfo::parse(info1),
+        Ok((XvcInfo::new(Version::new(1, 0), 4), info1.len()))
     );
+
+    let info2 = b"xvcServer_v10.2:24\n";
     assert_eq!(
         XvcInfo::parse(b"xvcServer_v10.2:24\n"),
-        Ok((XvcInfo::new(Version::new(10, 2), 24), &[] as &[u8]))
+        Ok((XvcInfo::new(Version::new(10, 2), 24), info2.len()))
     );
 }
 
@@ -81,7 +84,7 @@ impl<'a> From<ParseVersionError> for ParseErr<'a> {
     }
 }
 
-pub type ParseResult<'a, T> = std::result::Result<(T, &'a [u8]), ParseErr<'a>>;
+pub type ParseResult<'a, T> = std::result::Result<(T, usize), ParseErr<'a>>;
 
 impl XvcCommand {
     /// Parse a command from a buffer.
@@ -124,11 +127,11 @@ impl XvcCommand {
             return Err(ParseErr::Incomplete);
         };
         // Note: We use position + 1 to include the ':' character
-        let (command, rhs) = buf.split_at(position + 1);
+        let (command, _) = buf.split_at(position + 1);
         match command {
-            b"getinfo:" => ParseResult::Ok((XvcCommand::GetInfo, rhs)),
-            b"settck:" => ParseResult::Ok((XvcCommand::SetTck, rhs)),
-            b"shift:" => ParseResult::Ok((XvcCommand::Shift, rhs)),
+            b"getinfo:" => ParseResult::Ok((XvcCommand::GetInfo, command.len())),
+            b"settck:" => ParseResult::Ok((XvcCommand::SetTck, command.len())),
+            b"shift:" => ParseResult::Ok((XvcCommand::Shift, command.len())),
             other => ParseResult::Err(ParseErr::InvalidCommand(other)),
         }
     }
@@ -150,7 +153,7 @@ impl SetTck {
             Err(ParseErr::Incomplete)
         } else {
             let period = u32::from_le_bytes(buf[..4].try_into().unwrap());
-            Ok((SetTck { period }, &buf[4..]))
+            Ok((SetTck { period }, 4))
         }
     }
 }
@@ -175,12 +178,12 @@ impl<'a> Shift<'a> {
     }
 }
 
-impl<'a> Shift<'a> {
-    pub fn parse_num_bits(buf: &'a [u8]) -> ParseResult<'a, u32> {
+impl Shift<'_> {
+    pub fn parse_num_bits<'b>(buf: &'b [u8]) -> ParseResult<'b, u32> {
         if buf.len() < 4 {
             return Err(ParseErr::Incomplete);
         }
-        Ok((u32::from_le_bytes(buf[..4].try_into().unwrap()), &buf[4..]))
+        Ok((u32::from_le_bytes(buf[..4].try_into().unwrap()), 4))
     }
 
     /// This is mostly an internal convenience method when parsing the `Shift` command.
@@ -196,7 +199,7 @@ impl<'a> Shift<'a> {
     /// // Write the buffer to a JTAG device
     /// Shift::parse_tdi_or_tms(&buf, 32, 32);
     /// ```
-    pub fn parse_tdi_or_tms(
+    pub fn parse_tdi_or_tms<'a>(
         buf: &'a [u8],
         num_bytes: usize,
         max_len: usize,
@@ -210,14 +213,16 @@ impl<'a> Shift<'a> {
         if buf.len() < num_bytes {
             return Err(ParseErr::Incomplete);
         }
-        Ok(buf.split_at(num_bytes))
+        Ok((&buf[..num_bytes], num_bytes))
     }
 
-    pub fn parse(buf: &'a [u8], max_len: usize) -> ParseResult<'a, Self> {
-        let (num_bits, buf) = Self::parse_num_bits(buf)?;
+    pub fn parse<'a>(buf: &'a [u8], max_len: usize) -> ParseResult<'a, Shift<'a>> {
+        let (num_bits, count) = Self::parse_num_bits(buf)?;
         let num_bytes = num_bits.div_ceil(8) as usize;
-        let (tdi, buf) = Self::parse_tdi_or_tms(buf, num_bytes, max_len)?;
-        let (tms, buf) = Self::parse_tdi_or_tms(buf, num_bytes, max_len)?;
-        Ok((Shift { num_bits, tdi, tms }, buf))
+        let buf = &buf[count..];
+        let (tms, count) = Self::parse_tdi_or_tms(&buf, num_bytes, max_len)?;
+        let buf = &buf[count..];
+        let (tdi, count) = Self::parse_tdi_or_tms(&buf, num_bytes, max_len)?;
+        Ok((Shift { num_bits, tdi, tms }, count + 2 * num_bytes))
     }
 }

@@ -84,7 +84,7 @@ impl XvcClient {
     /// Query server capabilities and version information.
     pub fn get_info(&mut self) -> Result<XvcInfo, ReadError> {
         Message::GetInfo.write_to(&mut self.tcp)?;
-        XvcInfo::from_reader(&mut self.tcp)
+        XvcInfo::from_reader(&mut self.tcp, 4096)
     }
 
     /// Set the JTAG Test Clock (TCK) period.

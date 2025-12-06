@@ -1,12 +1,7 @@
-use std::{
-    error::Error,
-    fmt::Display,
-    format,
-    io::{self},
-    num::ParseIntError,
-    str::Utf8Error,
-    string::String,
-};
+use core::{error::Error, fmt::Display, num::ParseIntError, str::Utf8Error};
+use std::{format, io, prelude::v1::*};
+
+use crate::codec::ParseErr;
 
 /// Errors that may occur when reading a message from a stream.
 #[derive(Debug)]
@@ -39,6 +34,29 @@ impl From<ParseIntError> for ReadError {
 impl From<ParseVersionError> for ReadError {
     fn from(value: ParseVersionError) -> Self {
         Self::InvalidFormat(format!("{}", value))
+    }
+}
+
+impl<'a> From<crate::codec::ParseErr<'a>> for ReadError {
+    fn from(value: crate::codec::ParseErr<'a>) -> Self {
+        match value {
+            // TODO: this shouldn't panic
+            ParseErr::Incomplete => panic!("Incomplete read error"),
+            ParseErr::InvalidCommand(items) => {
+                ReadError::InvalidCommand(String::from_utf8_lossy(items).to_string())
+            }
+            ParseErr::TooManyBytes { max, got } => ReadError::TooManyBytes { max, got },
+            ParseErr::Utf8Error(utf8_error) => {
+                ReadError::InvalidFormat(format!("Invalid utf8: {}", utf8_error))
+            }
+            ParseErr::ParseIntError(parse_int_error) => {
+                ReadError::InvalidFormat(format!("Invalid integer: {}", parse_int_error))
+            }
+            ParseErr::ParseVersionError(parse_version_error) => ReadError::InvalidFormat(format!(
+                "Could not parse version: {}",
+                parse_version_error
+            )),
+        }
     }
 }
 

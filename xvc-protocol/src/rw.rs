@@ -1,14 +1,119 @@
 /// Read and write implementations for the protocol messages
 use std::{
-    io::{self, BufRead, BufReader, Read, Write},
-    string::{String, ToString},
-    vec,
-    vec::Vec,
+    io::{self, Read, Write},
+    prelude::v1::*,
 };
 
-use crate::{Message, Version, XvcInfo, error::ReadError};
+use crate::{
+    Message, XvcCommand, XvcInfo,
+    codec::{ParseErr, SetTck, Shift},
+    error::ReadError,
+};
 
-const XVC_INFO_PREFIX: &[u8] = b"xvcServer";
+pub struct Decoder {
+    buf: Vec<u8>,
+    max: usize,
+}
+
+impl Decoder {
+    /// Create a new decoder with a given initial capacity and max size.
+    pub fn new(max_size: usize) -> Self {
+        Self {
+            buf: Vec::new(),
+            max: max_size,
+        }
+    }
+
+    fn read_chunk(&mut self, reader: &mut impl Read) -> Result<(), ReadError> {
+        let mut temp = [0u8; 1024];
+        let read = loop {
+            match reader.read(&mut temp) {
+                Ok(n) => break n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {
+                    continue; // retry
+                }
+                Err(e) => return Err(e.into()), // real error
+            }
+        };
+        if read == 0 {
+            // EOF: if incomplete, it's a protocol error
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "unexpected EOF while reading",
+            )
+            .into());
+        }
+
+        if self.max < read + self.buf.len() {
+            return Err(ReadError::TooManyBytes {
+                max: self.max,
+                got: read + self.buf.len(),
+            });
+        }
+        self.buf.extend_from_slice(&temp);
+
+        Ok(())
+    }
+
+    pub fn read_xvc_info(&mut self, reader: &mut impl Read) -> Result<XvcInfo, ReadError> {
+        loop {
+            match XvcInfo::parse(&self.buf) {
+                Ok((frame, _)) => {
+                    return Ok(frame);
+                }
+                Err(ParseErr::Incomplete) => {
+                    self.read_chunk(reader)?;
+                }
+                Err(other) => return Err(other.into()),
+            }
+        }
+    }
+
+    pub fn read_message(&mut self, reader: &mut impl Read) -> Result<Message, ReadError> {
+        let (cmd, size) = loop {
+            match XvcCommand::parse(&self.buf) {
+                Ok(cmd) => {
+                    break cmd;
+                }
+                Err(ParseErr::Incomplete) => {
+                    self.read_chunk(reader)?;
+                }
+                Err(other) => return Err(other.into()),
+            }
+        };
+        match cmd {
+            XvcCommand::GetInfo => Ok(Message::GetInfo),
+            XvcCommand::SetTck => loop {
+                match SetTck::parse(&self.buf[size..]) {
+                    Ok((tck, _)) => {
+                        return Ok(Message::SetTck {
+                            period_ns: tck.period(),
+                        });
+                    }
+                    Err(ParseErr::Incomplete) => {
+                        self.read_chunk(reader)?;
+                    }
+                    Err(other) => return Err(other.into()),
+                }
+            },
+            XvcCommand::Shift => loop {
+                match Shift::parse(&self.buf[size..], self.max) {
+                    Ok((shift, _)) => {
+                        return Ok(Message::Shift {
+                            num_bits: shift.num_bits(),
+                            tms: shift.tms().into(),
+                            tdi: shift.tdi().into(),
+                        });
+                    }
+                    Err(ParseErr::Incomplete) => {
+                        self.read_chunk(reader)?;
+                    }
+                    Err(other) => return Err(other.into()),
+                }
+            },
+        }
+    }
+}
 
 impl XvcInfo {
     pub fn write_to(&self, writer: &mut impl Write) -> io::Result<()> {
@@ -20,46 +125,11 @@ impl XvcInfo {
         )
     }
 
-    pub fn from_reader(reader: &mut impl Read) -> Result<XvcInfo, ReadError> {
-        let mut buf_reader = BufReader::with_capacity(32, reader);
-        let mut line = Vec::with_capacity(32);
-        let _ = buf_reader.read_until(b'\n', &mut line)?;
-
-        // Remove trailing newline
-        let mut line = line.trim_ascii_end();
-
-        // Parse format: "xvcServer_v{version}:{max_vector_len_bytes}"
-        if !line.starts_with(XVC_INFO_PREFIX) {
-            return Err(ReadError::InvalidFormat(
-                "Invalid prefix in info message".to_string(),
-            ));
-        }
-
-        line = &line[XVC_INFO_PREFIX.len()..];
-        if line[0] != b'_' {
-            return Err(ReadError::InvalidFormat(
-                "Missing '_' separator".to_string(),
-            ));
-        }
-
-        line = &line[1..];
-        if line[0] != b'v' {
-            return Err(ReadError::InvalidFormat(
-                "Version must start with 'v".to_string(),
-            ));
-        }
-
-        line = &line[1..];
-        let colon_index = line.iter().position(|l| *l == b':').ok_or_else(|| {
-            ReadError::InvalidFormat("Missing ':' separator in info message".to_string())
-        })?;
-
-        let (version_part, rest) = line.split_at(colon_index);
-        let version = str::from_utf8(version_part)?.parse::<Version>()?;
-
-        let max_vector_len = str::from_utf8(&rest[1..])?.parse::<u32>()?;
-
-        Ok(XvcInfo::new(version, max_vector_len))
+    pub fn from_reader(
+        reader: &mut impl Read,
+        max_buffer_size: usize,
+    ) -> Result<XvcInfo, ReadError> {
+        Decoder::new(max_buffer_size).read_xvc_info(reader)
     }
 }
 
@@ -74,8 +144,8 @@ fn write_server_info() {
 fn read_server_info() {
     let data = b"xvcServer_v1.0:32\n";
     let mut cursor = std::io::Cursor::new(data);
-    let info = XvcInfo::from_reader(&mut cursor).unwrap();
-    assert_eq!(info.version(), Version::V1_0);
+    let info = XvcInfo::from_reader(&mut cursor, 4096).unwrap();
+    assert_eq!(info.version(), crate::protocol::Version::V1_0);
     assert_eq!(info.max_vector_len(), 32)
 }
 
@@ -89,73 +159,7 @@ impl Message {
         reader: &mut impl Read,
         max_shift_bytes: usize,
     ) -> Result<Message, ReadError> {
-        // Buffer must accommodate: "shift:" (5) + num_bits (4) = 13 bytes minimum
-        let mut buf = [0u8; 16];
-        // read 2 bytes into the buffer
-        reader.read_exact(&mut buf[..2])?;
-        match &buf[..2] {
-            b"ge" => {
-                reader.read_exact(&mut buf[2..Self::CMD_NAME_GET_INFO.len() + 1])?;
-                if &buf[..Self::CMD_NAME_GET_INFO.len()] != Self::CMD_NAME_GET_INFO
-                    || buf[Self::CMD_NAME_GET_INFO.len()] != Self::CMD_DELIMITER
-                {
-                    return Err(ReadError::InvalidCommand(
-                        String::from_utf8_lossy(&buf).to_string(),
-                    ));
-                }
-                Ok(Message::GetInfo)
-            }
-            b"se" => {
-                reader.read_exact(&mut buf[2..Self::CMD_NAME_SET_TCK.len() + 1 + 4])?;
-                if &buf[..Self::CMD_NAME_SET_TCK.len()] != Self::CMD_NAME_SET_TCK
-                    || buf[Self::CMD_NAME_SET_TCK.len()] != Self::CMD_DELIMITER
-                {
-                    return Err(ReadError::InvalidCommand(
-                        String::from_utf8_lossy(&buf).to_string(),
-                    ));
-                }
-                let period = u32::from_le_bytes(
-                    buf[Self::CMD_NAME_SET_TCK.len() + 1..Self::CMD_NAME_SET_TCK.len() + 5]
-                        .try_into()
-                        .unwrap(),
-                );
-                Ok(Message::SetTck { period_ns: period })
-            }
-            b"sh" => {
-                reader.read_exact(&mut buf[2..Self::CMD_NAME_SHIFT.len() + 1 + 4])?;
-                if &buf[..Self::CMD_NAME_SHIFT.len()] != Self::CMD_NAME_SHIFT
-                    || buf[Self::CMD_NAME_SHIFT.len()] != Self::CMD_DELIMITER
-                {
-                    return Err(ReadError::InvalidCommand(
-                        String::from_utf8_lossy(&buf).to_string(),
-                    ));
-                }
-                let num_bits = u32::from_le_bytes(
-                    buf[Self::CMD_NAME_SHIFT.len() + 1..Self::CMD_NAME_SHIFT.len() + 5]
-                        .try_into()
-                        .unwrap(),
-                );
-                let num_bytes = num_bits.div_ceil(8_u32) as usize;
-                if num_bytes > max_shift_bytes {
-                    return Err(ReadError::TooManyBytes {
-                        max: max_shift_bytes,
-                        got: num_bytes,
-                    });
-                }
-                let mut tms_vector = vec![0_u8; num_bytes].into_boxed_slice();
-                reader.read_exact(&mut tms_vector[..])?;
-                let mut tdi_vector = vec![0_u8; num_bytes].into_boxed_slice();
-                reader.read_exact(&mut tdi_vector[..])?;
-                Ok(Message::Shift {
-                    num_bits,
-                    tms: tms_vector,
-                    tdi: tdi_vector,
-                })
-            }
-            _ => Err(ReadError::InvalidCommandPrefix(
-                String::from_utf8_lossy(&buf[..2]).to_string(),
-            )),
-        }
+        Decoder::new(max_shift_bytes).read_message(reader)
     }
 
     pub fn write_to(&self, writer: &mut impl Write) -> io::Result<()> {

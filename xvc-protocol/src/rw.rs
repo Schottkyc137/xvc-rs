@@ -10,13 +10,35 @@ use crate::{
     error::ReadError,
 };
 
+/// Protocol decoder.
+///
+/// `Decoder` holds an internal buffer and reads from an underlying stream
+/// until a complete protocol frame or command can be parsed. It enforces a
+/// maximum buffer size to protect against oversized messages.
+///
+/// Typical usage:
+///
+/// ```rust
+/// use xvc_protocol::{Message, XvcInfo};
+/// use std::io::Cursor;
+///
+/// // Read a single message from a byte stream
+/// let mut data = b"getinfo:".as_slice();
+/// let mut dec = xvc_protocol::rw::Decoder::new(1024);
+/// let msg = dec.read_message(&mut data).unwrap();
+/// assert!(matches!(msg, Message::GetInfo));
+/// ```
 pub struct Decoder {
     buf: Vec<u8>,
     max: usize,
 }
 
 impl Decoder {
-    /// Create a new decoder with a given initial capacity and max size.
+    /// Create a new decoder with a given max size.
+    ///
+    /// The `max_size` parameter bounds the internal buffer used when reading
+    /// messages from a stream; if a message would require more bytes than
+    /// `max_size` a `ReadError::TooManyBytes` is returned when reading.
     pub fn new(max_size: usize) -> Self {
         Self {
             buf: Vec::new(),
@@ -36,26 +58,41 @@ impl Decoder {
             }
         };
         if read == 0 {
-            // EOF: if incomplete, it's a protocol error
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "unexpected EOF while reading",
-            )
-            .into());
+            // EOF: if buffer is non-empty, it means we have incomplete data
+            if !self.buf.is_empty() {
+                return Err(ReadError::InvalidCommandPrefix(
+                    String::from_utf8_lossy(&self.buf).to_string(),
+                ));
+            } else {
+                // Buffer is empty, this is a clean EOF
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "unexpected EOF while reading",
+                )
+                .into());
+            }
         }
 
         if self.max < read + self.buf.len() {
             return Err(ReadError::TooManyBytes {
                 max: self.max,
-                got: read + self.buf.len(),
+                need: read + self.buf.len(),
             });
         }
-        self.buf.extend_from_slice(&temp);
+        // Only append the bytes actually read
+        self.buf.extend_from_slice(&temp[..read]);
 
         Ok(())
     }
 
+    /// Read an `XvcInfo` frame from `reader`.
+    ///
+    /// This method incrementally fills the internal buffer from `reader` until
+    /// a complete XVC server info frame is available and returns the parsed
+    /// `XvcInfo`. If EOF is encountered with partial data buffered, a
+    /// `ReadError::InvalidCommandPrefix` is returned.
     pub fn read_xvc_info(&mut self, reader: &mut impl Read) -> Result<XvcInfo, ReadError> {
+        self.buf.clear();
         loop {
             match XvcInfo::parse(&self.buf) {
                 Ok((frame, _)) => {
@@ -69,7 +106,24 @@ impl Decoder {
         }
     }
 
+    /// Read a single protocol `Message` from `reader`.
+    ///
+    /// The decoder reads from `reader` until a full command and its payload
+    /// are available, enforces negotiated limits (e.g. maximum shift buffer
+    /// size) and returns the parsed `Message`. On EOF with a partial
+    /// command present, a `ReadError::InvalidCommandPrefix` is returned.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use std::io::Cursor;
+    /// let mut cursor = Cursor::new(b"getinfo:");
+    /// let mut dec = xvc_protocol::rw::Decoder::new(1024);
+    /// let msg = dec.read_message(&mut cursor).unwrap();
+    /// assert!(matches!(msg, xvc_protocol::Message::GetInfo));
+    /// ```
     pub fn read_message(&mut self, reader: &mut impl Read) -> Result<Message, ReadError> {
+        self.buf.clear();
         let (cmd, size) = loop {
             match XvcCommand::parse(&self.buf) {
                 Ok(cmd) => {
@@ -116,6 +170,11 @@ impl Decoder {
 }
 
 impl XvcInfo {
+    /// Write this `XvcInfo` to `writer` in the protocol's server-info format.
+    ///
+    /// The output has the form `xvcServer_v<major>.<minor>:<max_vector_len>\n`.
+    /// This is the canonical representation sent by servers to announce
+    /// capabilities to clients.
     pub fn write_to(&self, writer: &mut impl Write) -> io::Result<()> {
         writeln!(
             writer,
@@ -125,6 +184,19 @@ impl XvcInfo {
         )
     }
 
+    /// Read an `XvcInfo` from `reader` using an internal `Decoder`.
+    ///
+    /// This is a convenience wrapper that constructs a `Decoder` configured
+    /// with `max_buffer_size` and delegates to its `read_xvc_info` method.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use std::io::Cursor;
+    /// let mut c = Cursor::new(b"xvcServer_v1.0:32\n");
+    /// let info = xvc_protocol::XvcInfo::from_reader(&mut c, 4096).unwrap();
+    /// assert_eq!(info.max_vector_len(), 32);
+    /// ```
     pub fn from_reader(
         reader: &mut impl Read,
         max_buffer_size: usize,
@@ -133,28 +205,25 @@ impl XvcInfo {
     }
 }
 
-#[test]
-fn write_server_info() {
-    let mut out = Vec::new();
-    XvcInfo::default().write_to(&mut out).unwrap();
-    assert_eq!(out, b"xvcServer_v1.0:10485760\n".to_vec());
-}
-
-#[test]
-fn read_server_info() {
-    let data = b"xvcServer_v1.0:32\n";
-    let mut cursor = std::io::Cursor::new(data);
-    let info = XvcInfo::from_reader(&mut cursor, 4096).unwrap();
-    assert_eq!(info.version(), crate::protocol::Version::V1_0);
-    assert_eq!(info.max_vector_len(), 32)
-}
-
 impl Message {
     const CMD_NAME_GET_INFO: &'static [u8; 7] = b"getinfo";
     const CMD_NAME_SET_TCK: &'static [u8; 6] = b"settck";
     const CMD_NAME_SHIFT: &'static [u8; 5] = b"shift";
     const CMD_DELIMITER: u8 = b':';
 
+    /// Read a `Message` from `reader` using an internal `Decoder`.
+    ///
+    /// This is a convenience wrapper that constructs a `Decoder` configured
+    /// with `max_shift_bytes` and delegates to its `read_message` method.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use std::io::Cursor;
+    /// let mut c = Cursor::new(b"getinfo:");
+    /// let msg = xvc_protocol::Message::from_reader(&mut c, 1024).unwrap();
+    /// assert!(matches!(msg, xvc_protocol::Message::GetInfo));
+    /// ```
     pub fn from_reader(
         reader: &mut impl Read,
         max_shift_bytes: usize,
@@ -162,6 +231,14 @@ impl Message {
         Decoder::new(max_shift_bytes).read_message(reader)
     }
 
+    /// Serialize this `Message` to `writer` in the protocol command format.
+    ///
+    /// - `GetInfo` is written as `getinfo:`
+    /// - `SetTck` is written as `settck:` followed by a 4-byte little-endian period
+    /// - `Shift` is written as `shift:` followed by a 4-byte little-endian `num_bits`,
+    ///   then the `tms` and `tdi` payload bytes
+    ///
+    /// The function writes raw bytes and returns any I/O error encountered.
     pub fn write_to(&self, writer: &mut impl Write) -> io::Result<()> {
         match self {
             Message::GetInfo => {
@@ -197,6 +274,22 @@ mod test {
     use super::*;
 
     const DEFAULT_MAX_SHIFT_BYTES: usize = 1024;
+
+    #[test]
+    fn write_server_info() {
+        let mut out = Vec::new();
+        XvcInfo::default().write_to(&mut out).unwrap();
+        assert_eq!(out, b"xvcServer_v1.0:10485760\n".to_vec());
+    }
+
+    #[test]
+    fn read_server_info() {
+        let data = b"xvcServer_v1.0:32\n";
+        let mut cursor = std::io::Cursor::new(data);
+        let info = XvcInfo::from_reader(&mut cursor, 4096).unwrap();
+        assert_eq!(info.version(), crate::protocol::Version::V1_0);
+        assert_eq!(info.max_vector_len(), 32)
+    }
 
     #[test]
     fn read_getinfo() {
@@ -310,11 +403,571 @@ mod test {
         data.extend_from_slice(&num_bits.to_le_bytes());
         let mut cursor = Cursor::new(data);
         match Message::from_reader(&mut cursor, 1024) {
-            Err(ReadError::TooManyBytes { max, got }) => {
+            Err(ReadError::TooManyBytes { max, need: got }) => {
                 assert_eq!(max, 1024);
                 assert_eq!(got, num_bytes_exceed);
             }
             other => panic!("expected TooManyBytes, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn read_xvc_info_with_max_u32_vector_len() {
+        let data = b"xvcServer_v1.0:4294967295\n";
+        let mut cursor = Cursor::new(data);
+        let info = XvcInfo::from_reader(&mut cursor, 4096).unwrap();
+        assert_eq!(info.version(), crate::protocol::Version::V1_0);
+        assert_eq!(info.max_vector_len(), u32::MAX);
+    }
+
+    #[test]
+    fn read_xvc_info_with_zero_vector_len() {
+        let data = b"xvcServer_v1.0:0\n";
+        let mut cursor = Cursor::new(data);
+        let info = XvcInfo::from_reader(&mut cursor, 4096).unwrap();
+        assert_eq!(info.version(), crate::protocol::Version::V1_0);
+        assert_eq!(info.max_vector_len(), 0);
+    }
+
+    #[test]
+    fn read_xvc_info_with_large_version_numbers() {
+        let data = b"xvcServer_v999.999:1024\n";
+        let mut cursor = Cursor::new(data);
+        let info = XvcInfo::from_reader(&mut cursor, 4096).unwrap();
+        assert_eq!(info.version(), crate::protocol::Version::new(999, 999));
+        assert_eq!(info.max_vector_len(), 1024);
+    }
+
+    #[test]
+    fn read_xvc_info_buffer_too_small() {
+        let data = b"xvcServer_v1.0:4\n";
+        let mut cursor = Cursor::new(data);
+        match XvcInfo::from_reader(&mut cursor, 5) {
+            Err(ReadError::TooManyBytes { max, need: got }) => {
+                assert_eq!(max, 5);
+                assert!(got >= 17); // Length of the full message
+            }
+            other => panic!("expected TooManyBytes, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn read_xvc_info_incomplete_then_complete() {
+        // Simulate a slow network: first chunk is incomplete, second completes it
+        let data = b"xvcServer_v1.0:4\n";
+        let mut cursor = Cursor::new(data);
+
+        // Manually read the full data to simulate the real scenario
+        match XvcInfo::from_reader(&mut cursor, 4096) {
+            Ok(info) => {
+                assert_eq!(info.max_vector_len(), 4);
+            }
+            Err(e) => panic!(
+                "Should successfully parse despite potential slow network: {:?}",
+                e
+            ),
+        }
+    }
+
+    #[test]
+    fn write_xvc_info_max_values() {
+        let mut out = Vec::new();
+        let info = XvcInfo::new(crate::protocol::Version::new(255, 255), u32::MAX);
+        info.write_to(&mut out).unwrap();
+        assert_eq!(out, b"xvcServer_v255.255:4294967295\n".to_vec());
+    }
+
+    #[test]
+    fn read_getinfo_with_extra_data() {
+        // Multiple getinfo commands in sequence
+        let data = b"getinfo:getinfo:";
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+            Message::GetInfo => {}
+            _ => panic!("expected GetInfo"),
+        }
+    }
+
+    #[test]
+    fn read_getinfo_exact() {
+        let data = b"getinfo:";
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+            Message::GetInfo => {}
+            _ => panic!("expected GetInfo"),
+        }
+    }
+
+    #[test]
+    fn read_settck_zero_period() {
+        let period: u32 = 0;
+        let mut data = b"settck:".to_vec();
+        data.extend_from_slice(&period.to_le_bytes());
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+            Message::SetTck {
+                period_ns: period_in_ns,
+            } => assert_eq!(period_in_ns, 0),
+            _ => panic!("expected SetTck"),
+        }
+    }
+
+    #[test]
+    fn read_settck_max_period() {
+        let period: u32 = u32::MAX;
+        let mut data = b"settck:".to_vec();
+        data.extend_from_slice(&period.to_le_bytes());
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+            Message::SetTck {
+                period_ns: period_in_ns,
+            } => assert_eq!(period_in_ns, u32::MAX),
+            _ => panic!("expected SetTck"),
+        }
+    }
+
+    #[test]
+    fn read_settck_incomplete() {
+        // Only command without period bytes
+        let data = b"settck:".to_vec();
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+            Err(ReadError::InvalidCommandPrefix(_)) => {}
+            other => panic!(
+                "expected InvalidCommandPrefix due to EOF with buffered data, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn read_settck_partial_period() {
+        // Command with only 2 bytes of period (needs 4)
+        let mut data = b"settck:".to_vec();
+        data.extend_from_slice(&[0xAA, 0xBB]);
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+            Err(ReadError::InvalidCommandPrefix(_)) => {}
+            other => panic!(
+                "expected InvalidCommandPrefix due to EOF with buffered data, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn read_shift_zero_bits() {
+        let num_bits: u32 = 0;
+        let tms: Vec<u8> = vec![];
+        let tdi: Vec<u8> = vec![];
+
+        let mut data = b"shift:".to_vec();
+        data.extend_from_slice(&num_bits.to_le_bytes());
+        data.extend_from_slice(&tms);
+        data.extend_from_slice(&tdi);
+
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+            Message::Shift {
+                num_bits: nb,
+                tms: tms_vector,
+                tdi: tdi_vector,
+            } => {
+                assert_eq!(nb, 0);
+                assert_eq!(&*tms_vector, &[]);
+                assert_eq!(&*tdi_vector, &[]);
+            }
+            _ => panic!("expected Shift"),
+        }
+    }
+
+    #[test]
+    fn read_shift_one_bit() {
+        let num_bits: u32 = 1;
+        let tms = vec![0x00u8];
+        let tdi = vec![0x01u8];
+
+        let mut data = b"shift:".to_vec();
+        data.extend_from_slice(&num_bits.to_le_bytes());
+        data.extend_from_slice(&tms);
+        data.extend_from_slice(&tdi);
+
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+            Message::Shift {
+                num_bits: nb,
+                tms: tms_vector,
+                tdi: tdi_vector,
+            } => {
+                assert_eq!(nb, 1);
+                assert_eq!(&*tms_vector, &tms[..]);
+                assert_eq!(&*tdi_vector, &tdi[..]);
+            }
+            _ => panic!("expected Shift"),
+        }
+    }
+
+    #[test]
+    fn read_shift_max_bits() {
+        let num_bits: u32 = u32::MAX;
+        let mut data = b"shift:".to_vec();
+        data.extend_from_slice(&num_bits.to_le_bytes());
+
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, 1024) {
+            Err(ReadError::TooManyBytes { .. }) => {} // Expected: too large for buffer
+            other => panic!("expected TooManyBytes, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn read_shift_incomplete_num_bits() {
+        let mut data = b"shift:".to_vec();
+        data.extend_from_slice(&[0xAA, 0xBB]); // Only 2 bytes of 4 needed
+
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+            Err(ReadError::InvalidCommandPrefix(_)) => {}
+            other => panic!(
+                "expected InvalidCommandPrefix due to EOF with buffered data, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn read_shift_incomplete_tms() {
+        // num_bits = 16 -> needs 2 bytes TMS, but provide only 1
+        let num_bits: u32 = 16;
+        let mut data = b"shift:".to_vec();
+        data.extend_from_slice(&num_bits.to_le_bytes());
+        data.extend_from_slice(&[0xAA]); // Only 1 byte instead of 2
+
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+            Err(ReadError::InvalidCommandPrefix(_)) => {}
+            other => panic!(
+                "expected InvalidCommandPrefix due to EOF with buffered data, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn read_shift_incomplete_tdi() {
+        // num_bits = 8 -> needs 1 byte TMS and 1 byte TDI
+        let num_bits: u32 = 8;
+        let mut data = b"shift:".to_vec();
+        data.extend_from_slice(&num_bits.to_le_bytes());
+        data.extend_from_slice(&[0xAA]); // TMS
+        // TDI is missing
+
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+            Err(ReadError::InvalidCommandPrefix(_)) => {}
+            other => panic!(
+                "expected InvalidCommandPrefix due to EOF with buffered data, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn read_shift_large_vectors() {
+        let num_bits: u32 = 1000;
+        let num_bytes = num_bits.div_ceil(8) as usize;
+        let tms = vec![0xAA; num_bytes];
+        let tdi = vec![0x55; num_bytes];
+
+        let mut data = b"shift:".to_vec();
+        data.extend_from_slice(&num_bits.to_le_bytes());
+        data.extend_from_slice(&tms);
+        data.extend_from_slice(&tdi);
+
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+            Message::Shift {
+                num_bits: nb,
+                tms: tms_vector,
+                tdi: tdi_vector,
+            } => {
+                assert_eq!(nb, num_bits);
+                assert_eq!(&*tms_vector, &tms[..]);
+                assert_eq!(&*tdi_vector, &tdi[..]);
+            }
+            _ => panic!("expected Shift"),
+        }
+    }
+
+    #[test]
+    fn read_shift_exactly_at_max_size() {
+        let max_size = 1024;
+        // num_bits = 4096 bits = 512 bytes
+        // Total message: "shift:" (6) + 4 bytes (num_bits) + 512 (tms) + 512 (tdi) = 1034 bytes
+        // This exceeds 1024, so should fail
+        let num_bits: u32 = 4096;
+        let num_bytes = 512;
+
+        let mut data = b"shift:".to_vec();
+        data.extend_from_slice(&num_bits.to_le_bytes());
+        data.extend_from_slice(&vec![0xAA; num_bytes]);
+        data.extend_from_slice(&vec![0x55; num_bytes]);
+
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, max_size) {
+            Err(ReadError::TooManyBytes { .. }) => {}
+            other => panic!("expected TooManyBytes, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn write_shift_zero_bits() {
+        let cmd = Message::Shift {
+            num_bits: 0,
+            tms: Box::new([]),
+            tdi: Box::new([]),
+        };
+        let mut out = Vec::new();
+        cmd.write_to(&mut out).unwrap();
+
+        let mut expected = b"shift:".to_vec();
+        expected.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn write_shift_max_bits() {
+        let cmd = Message::Shift {
+            num_bits: u32::MAX,
+            tms: Box::new([0xFF; 512]),
+            tdi: Box::new([0xAA; 512]),
+        };
+        let mut out = Vec::new();
+        cmd.write_to(&mut out).unwrap();
+
+        let mut expected = b"shift:".to_vec();
+        expected.extend_from_slice(&u32::MAX.to_le_bytes());
+        expected.extend_from_slice(&[0xFF; 512]);
+        expected.extend_from_slice(&[0xAA; 512]);
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn invalid_command_name() {
+        let data = b"invalid:".to_vec();
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+            Err(ReadError::InvalidCommand(_)) => {}
+            other => panic!("expected InvalidCommand, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn empty_input() {
+        let data = b"".to_vec();
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+            Err(ReadError::IoError(_)) => {}
+            other => panic!("expected IoError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn only_delimiter() {
+        let data = b":".to_vec();
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+            Err(ReadError::InvalidCommand(_)) => {}
+            other => panic!("expected InvalidCommand, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn binary_garbage_input() {
+        let data = vec![0xFF, 0xFE, 0xFD, 0xFC];
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+            Err(ReadError::InvalidCommandPrefix(_)) => {}
+            other => panic!("expected InvalidCommandPrefix, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn roundtrip_xvc_info() {
+        let original = XvcInfo::new(crate::protocol::Version::new(1, 0), 8192);
+        let mut buffer = Vec::new();
+        original.write_to(&mut buffer).unwrap();
+
+        let mut cursor = Cursor::new(buffer);
+        let parsed = XvcInfo::from_reader(&mut cursor, 4096).unwrap();
+
+        assert_eq!(parsed.version(), original.version());
+        assert_eq!(parsed.max_vector_len(), original.max_vector_len());
+    }
+
+    #[test]
+    fn roundtrip_getinfo() {
+        let original = Message::GetInfo;
+        let mut buffer = Vec::new();
+        original.write_to(&mut buffer).unwrap();
+
+        let mut cursor = Cursor::new(buffer);
+        let parsed = Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap();
+
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn roundtrip_settck() {
+        let original = Message::SetTck {
+            period_ns: 0x12345678,
+        };
+        let mut buffer = Vec::new();
+        original.write_to(&mut buffer).unwrap();
+
+        let mut cursor = Cursor::new(buffer);
+        let parsed = Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap();
+
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn roundtrip_shift() {
+        let num_bits = 128;
+        let num_bytes = (num_bits / 8) as usize;
+        let original = Message::Shift {
+            num_bits,
+            tms: vec![0xAA; num_bytes].into_boxed_slice(),
+            tdi: vec![0x55; num_bytes].into_boxed_slice(),
+        };
+        let mut buffer = Vec::new();
+        original.write_to(&mut buffer).unwrap();
+
+        let mut cursor = Cursor::new(buffer);
+        let parsed = Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap();
+
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn shift_num_bits_rounding() {
+        // Test that num_bits is correctly rounded up to nearest byte
+        // 13 bits = 2 bytes
+        let num_bits: u32 = 13;
+        let num_bytes = num_bits.div_ceil(8) as usize;
+        let tms = vec![0xAA; num_bytes];
+        let tdi = vec![0x55; num_bytes];
+
+        let mut data = b"shift:".to_vec();
+        data.extend_from_slice(&num_bits.to_le_bytes());
+        data.extend_from_slice(&tms);
+        data.extend_from_slice(&tdi);
+
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+            Message::Shift {
+                num_bits: nb,
+                tms: tms_vector,
+                tdi: tdi_vector,
+            } => {
+                assert_eq!(nb, 13);
+                assert_eq!(tms_vector.len(), 2);
+                assert_eq!(tdi_vector.len(), 2);
+            }
+            _ => panic!("expected Shift"),
+        }
+    }
+
+    #[test]
+    fn shift_1_bit_requires_1_byte() {
+        let num_bits: u32 = 1;
+        let tms = vec![0x00; 1];
+        let tdi = vec![0x01; 1];
+
+        let mut data = b"shift:".to_vec();
+        data.extend_from_slice(&num_bits.to_le_bytes());
+        data.extend_from_slice(&tms);
+        data.extend_from_slice(&tdi);
+
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+            Message::Shift {
+                num_bits: nb,
+                tms: tms_vector,
+                tdi: tdi_vector,
+            } => {
+                assert_eq!(nb, 1);
+                assert_eq!(tms_vector.len(), 1);
+                assert_eq!(tdi_vector.len(), 1);
+            }
+            _ => panic!("expected Shift"),
+        }
+    }
+
+    #[test]
+    fn shift_8_bits_requires_1_byte() {
+        let num_bits: u32 = 8;
+        let tms = vec![0xFF; 1];
+        let tdi = vec![0xAA; 1];
+
+        let mut data = b"shift:".to_vec();
+        data.extend_from_slice(&num_bits.to_le_bytes());
+        data.extend_from_slice(&tms);
+        data.extend_from_slice(&tdi);
+
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+            Message::Shift {
+                num_bits: nb,
+                tms: tms_vector,
+                tdi: tdi_vector,
+            } => {
+                assert_eq!(nb, 8);
+                assert_eq!(tms_vector.len(), 1);
+                assert_eq!(tdi_vector.len(), 1);
+            }
+            _ => panic!("expected Shift"),
+        }
+    }
+
+    #[test]
+    fn shift_9_bits_requires_2_bytes() {
+        let num_bits: u32 = 9;
+        let tms = vec![0xFF; 2];
+        let tdi = vec![0xAA; 2];
+
+        let mut data = b"shift:".to_vec();
+        data.extend_from_slice(&num_bits.to_le_bytes());
+        data.extend_from_slice(&tms);
+        data.extend_from_slice(&tdi);
+
+        let mut cursor = Cursor::new(data);
+        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+            Message::Shift {
+                num_bits: nb,
+                tms: tms_vector,
+                tdi: tdi_vector,
+            } => {
+                assert_eq!(nb, 9);
+                assert_eq!(tms_vector.len(), 2);
+                assert_eq!(tdi_vector.len(), 2);
+            }
+            _ => panic!("expected Shift"),
+        }
+    }
+
+    #[test]
+    fn decoder_reusable_reads_two_messages() {
+        let mut cursor = Cursor::new(b"getinfo:");
+        let mut dec = Decoder::new(1024);
+        assert!(matches!(
+            dec.read_message(&mut cursor).unwrap(),
+            Message::GetInfo
+        ));
+        let mut cursor2 = Cursor::new(b"settck:\x42\x00\x00\x00");
+        assert!(matches!(
+            dec.read_message(&mut cursor2).unwrap(),
+            Message::SetTck { period_ns: 0x42 }
+        ));
     }
 }

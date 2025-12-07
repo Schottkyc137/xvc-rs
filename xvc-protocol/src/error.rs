@@ -10,7 +10,7 @@ pub enum ReadError {
     InvalidCommand(String),
     InvalidCommandPrefix(String),
     InvalidFormat(String),
-    TooManyBytes { max: usize, got: usize },
+    TooManyBytes { max: usize, need: usize },
 }
 
 impl From<io::Error> for ReadError {
@@ -45,7 +45,7 @@ impl<'a> From<crate::codec::ParseErr<'a>> for ReadError {
             ParseErr::InvalidCommand(items) => {
                 ReadError::InvalidCommand(String::from_utf8_lossy(items).to_string())
             }
-            ParseErr::TooManyBytes { max, got } => ReadError::TooManyBytes { max, got },
+            ParseErr::TooManyBytes { max, got } => ReadError::TooManyBytes { max, need: got },
             ParseErr::Utf8Error(utf8_error) => {
                 ReadError::InvalidFormat(format!("Invalid utf8: {}", utf8_error))
             }
@@ -69,7 +69,7 @@ impl Display for ReadError {
             ReadError::InvalidCommandPrefix(prefix) => {
                 write!(f, "Received invalid command with prefix {}", prefix)
             }
-            ReadError::TooManyBytes { max, got } => {
+            ReadError::TooManyBytes { max, need: got } => {
                 write!(f, "Message too large! Maximum is {}, but gut {}", max, got)
             }
         }

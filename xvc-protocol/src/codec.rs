@@ -11,8 +11,7 @@ const XVC_SERVER_PREFIX: &[u8] = b"xvcServer_v";
 impl XvcInfo {
     pub fn parse<'a>(buf: &'a [u8]) -> ParseResult<'a, XvcInfo> {
         let Some(pos) = buf.iter().position(|byte| *byte == b'\n') else {
-            // TODO: could also be error (command is not valid)
-            return Err(ParseErr::Incomplete);
+            todo!("Correct error recovery")
         };
         let mut buf = &buf[..pos];
         if !buf.starts_with(XVC_SERVER_PREFIX) {
@@ -26,23 +25,9 @@ impl XvcInfo {
         let (version_buf, buf) = buf.split_at(colon_index);
         let version = str::from_utf8(version_buf)?.parse::<Version>()?;
         let max_vector_len = str::from_utf8(&buf[1..])?.parse::<u32>()?;
-        Ok((XvcInfo::new(version, max_vector_len), pos))
+        // Return the number of bytes consumed including the trailing newline
+        Ok((XvcInfo::new(version, max_vector_len), pos + 1))
     }
-}
-
-#[test]
-fn parses_valid_xvc_info() {
-    let info1 = b"xvcServer_v1.0:4\n";
-    assert_eq!(
-        XvcInfo::parse(info1),
-        Ok((XvcInfo::new(Version::new(1, 0), 4), info1.len()))
-    );
-
-    let info2 = b"xvcServer_v10.2:24\n";
-    assert_eq!(
-        XvcInfo::parse(b"xvcServer_v10.2:24\n"),
-        Ok((XvcInfo::new(Version::new(10, 2), 24), info2.len()))
-    );
 }
 
 /// Errors that happen while parsing a command.
@@ -84,7 +69,7 @@ impl<'a> From<ParseVersionError> for ParseErr<'a> {
     }
 }
 
-pub type ParseResult<'a, T> = std::result::Result<(T, usize), ParseErr<'a>>;
+pub type ParseResult<'a, T> = core::result::Result<(T, usize), ParseErr<'a>>;
 
 impl XvcCommand {
     /// Parse a command from a buffer.
@@ -96,7 +81,7 @@ impl XvcCommand {
     /// let buf = b"getinfo:";
     /// let (command, rest) = XvcCommand::parse(buf).expect("Parsing a large enough buffer should not fail");
     /// assert_eq!(command, XvcCommand::GetInfo);
-    /// assert!(rest.is_empty());
+    /// assert!(rest == 0);
     /// ```
     ///
     /// If the buffer is not large enough, `ParseErr::Incomplete` is returned.
@@ -119,20 +104,19 @@ impl XvcCommand {
     /// let buf = b"settck:\x64";
     /// let (command, rest) = XvcCommand::parse(buf).expect("Parsing a large enough buffer should not fail");
     /// assert_eq!(command, XvcCommand::SetTck);
-    /// assert_eq!(rest, b"\x64");
+    /// assert_eq!(rest, 1);
     /// ```
     pub fn parse<'a>(buf: &'a [u8]) -> ParseResult<'a, XvcCommand> {
         let Some(position) = buf.iter().position(|byte| *byte == b':') else {
-            // TODO: could also be error (no ':' in command found)
-            return Err(ParseErr::Incomplete);
+            todo!("Correct error recovery")
         };
         // Note: We use position + 1 to include the ':' character
         let (command, _) = buf.split_at(position + 1);
         match command {
-            b"getinfo:" => ParseResult::Ok((XvcCommand::GetInfo, command.len())),
-            b"settck:" => ParseResult::Ok((XvcCommand::SetTck, command.len())),
-            b"shift:" => ParseResult::Ok((XvcCommand::Shift, command.len())),
-            other => ParseResult::Err(ParseErr::InvalidCommand(other)),
+            b"getinfo:" => Ok((XvcCommand::GetInfo, command.len())),
+            b"settck:" => Ok((XvcCommand::SetTck, command.len())),
+            b"shift:" => Ok((XvcCommand::Shift, command.len())),
+            other => Err(ParseErr::InvalidCommand(other)),
         }
     }
 }
@@ -217,12 +201,166 @@ impl Shift<'_> {
     }
 
     pub fn parse<'a>(buf: &'a [u8], max_len: usize) -> ParseResult<'a, Shift<'a>> {
-        let (num_bits, count) = Self::parse_num_bits(buf)?;
+        let (num_bits, nb_count) = Self::parse_num_bits(buf)?;
         let num_bytes = num_bits.div_ceil(8) as usize;
-        let buf = &buf[count..];
-        let (tms, count) = Self::parse_tdi_or_tms(&buf, num_bytes, max_len)?;
-        let buf = &buf[count..];
-        let (tdi, count) = Self::parse_tdi_or_tms(&buf, num_bytes, max_len)?;
-        Ok((Shift { num_bits, tdi, tms }, count + 2 * num_bytes))
+        let buf = &buf[nb_count..];
+        let (tms, tms_count) = Self::parse_tdi_or_tms(&buf, num_bytes, max_len)?;
+        let buf = &buf[tms_count..];
+        let (tdi, tdi_count) = Self::parse_tdi_or_tms(&buf, num_bytes, max_len)?;
+        // Total consumed bytes: bytes used to encode num_bits + bytes for tms + bytes for tdi
+        let consumed = nb_count + tms_count + tdi_count;
+        Ok((Shift { num_bits, tdi, tms }, consumed))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::vec::Vec;
+
+    #[test]
+    fn parses_valid_xvc_info() {
+        let info1 = b"xvcServer_v1.0:4\n";
+        assert_eq!(
+            XvcInfo::parse(info1),
+            Ok((XvcInfo::new(Version::new(1, 0), 4), info1.len()))
+        );
+
+        let info2 = b"xvcServer_v10.2:24\n";
+        assert_eq!(
+            XvcInfo::parse(b"xvcServer_v10.2:24\n"),
+            Ok((XvcInfo::new(Version::new(10, 2), 24), info2.len()))
+        );
+    }
+
+    #[test]
+    fn xvc_info_incomplete_no_newline() {
+        let buf = b"xvcServer_v1.0:4"; // no newline
+        assert!(matches!(XvcInfo::parse(buf), Err(ParseErr::Incomplete)));
+    }
+
+    #[test]
+    fn xvc_info_invalid_prefix() {
+        let buf = b"badprefix:1.0:4\n";
+        let res = XvcInfo::parse(buf);
+        assert!(matches!(res, Err(ParseErr::InvalidCommand(_))));
+    }
+
+    #[test]
+    fn xvc_info_missing_colon() {
+        let buf = b"xvcServer_v1.0\n";
+        let res = XvcInfo::parse(buf);
+        assert!(matches!(res, Err(ParseErr::InvalidCommand(_))));
+    }
+
+    #[test]
+    fn xvc_info_malformed_version() {
+        // version contains non-digit component
+        let buf = b"xvcServer_v1.a:4\n";
+        let res = XvcInfo::parse(buf);
+        assert!(matches!(res, Err(ParseErr::ParseVersionError(_))));
+    }
+
+    #[test]
+    fn xvc_info_invalid_max_vector_len() {
+        let buf = b"xvcServer_v1.0:NaN\n";
+        let res = XvcInfo::parse(buf);
+        assert!(matches!(res, Err(ParseErr::ParseIntError(_))));
+    }
+
+    #[test]
+    fn xvc_command_parse_valid_and_rest() {
+        let buf = b"settck:\x64";
+        let (cmd, consumed) = XvcCommand::parse(buf).expect("should parse settck");
+        assert_eq!(cmd, XvcCommand::SetTck);
+        assert_eq!(consumed, b"settck:".len());
+    }
+
+    #[test]
+    fn xvc_command_parse_incomplete() {
+        let buf = b"getin";
+        assert!(matches!(XvcCommand::parse(buf), Err(ParseErr::Incomplete)));
+    }
+
+    #[test]
+    fn xvc_command_parse_invalid() {
+        let buf = b"unknown:";
+        let res = XvcCommand::parse(buf);
+        assert!(matches!(res, Err(ParseErr::InvalidCommand(_))));
+    }
+
+    #[test]
+    fn set_tck_parse_ok_and_incomplete() {
+        let buf = [0x01u8, 0x00, 0x00, 0x00];
+        let (set, count) = SetTck::parse(&buf).expect("should parse period");
+        assert_eq!(set.period(), 1);
+        assert_eq!(count, 4);
+
+        let short = [0u8, 0u8, 0u8];
+        assert!(matches!(SetTck::parse(&short), Err(ParseErr::Incomplete)));
+    }
+
+    #[test]
+    fn shift_parse_num_bits_behaviour() {
+        assert!(matches!(
+            Shift::parse_num_bits(&[0u8, 0, 0]),
+            Err(ParseErr::Incomplete)
+        ));
+        let v = [0x0Cu8, 0, 0, 0]; // 12 bits
+        let (num_bits, count) = Shift::parse_num_bits(&v).expect("should parse num bits");
+        assert_eq!(num_bits, 12);
+        assert_eq!(count, 4);
+    }
+
+    #[test]
+    fn parse_tdi_or_tms_edge_cases() {
+        // too many bytes
+        let buf = [0u8; 4];
+        assert!(matches!(
+            Shift::parse_tdi_or_tms(&buf, 5, 4),
+            Err(ParseErr::TooManyBytes { .. })
+        ));
+
+        // incomplete
+        assert_eq!(
+            Shift::parse_tdi_or_tms(&buf[..1], 2, 4),
+            Err(ParseErr::Incomplete)
+        );
+
+        // ok
+        let (slice, count) = Shift::parse_tdi_or_tms(&buf, 4, 4).expect("should parse all bytes");
+        assert_eq!(count, 4);
+        assert_eq!(slice, &buf[..4]);
+    }
+
+    #[test]
+    fn shift_parse_ok_and_consumed_count() {
+        // num_bits = 12 -> num_bytes = 2
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(&12u32.to_le_bytes()); // 4 bytes num_bits
+        let tms = [0xAAu8, 0xBB];
+        let tdi = [0x11u8, 0x22];
+        buf.extend_from_slice(&tms);
+        buf.extend_from_slice(&tdi);
+
+        let (shift, consumed) = Shift::parse(&buf, 4).expect("shift parse should succeed");
+        assert_eq!(shift.num_bits(), 12);
+        assert_eq!(shift.tdi(), &tdi);
+        assert_eq!(shift.tms(), &tms);
+        // Expected consumed bytes: 4 (num_bits) + 2 (tms) + 2 (tdi) = 8
+        assert_eq!(consumed, 4 + 2 + 2);
+    }
+
+    #[test]
+    fn shift_parse_too_many_bytes_error() {
+        // num_bits -> num_bytes larger than max_len
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(&16u32.to_le_bytes()); // 16 bits -> 2 bytes
+        // Now request max_len = 1 so parse_tdi_or_tms fails
+        buf.extend_from_slice(&[0u8, 0u8]);
+        buf.extend_from_slice(&[0u8, 0u8]);
+
+        let res = Shift::parse(&buf, 1);
+        assert!(matches!(res, Err(ParseErr::TooManyBytes { .. })));
     }
 }

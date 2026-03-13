@@ -10,6 +10,7 @@ categories = ["api-bindings"]
 description = "Implementation of the Xilinx Virtual Cable (XVC) 1.0 protocol for JTAG communication with FPGA devices over network connections"
 
 [dependencies]
+bytes = { version = "1.11.0", default-features = false }
 
 [features]
 default = ["std"]

@@ -174,7 +174,7 @@ impl XvcServer for KernelDriverBackend {
         period_ns
     }
 
-    fn shift(&self, num_bits: u32, tms: Box<[u8]>, tdi: Box<[u8]>) -> Box<[u8]> {
+    fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8]) -> Box<[u8]> {
         match self.shift_data(num_bits, &tms, &tdi) {
             Ok(result) => result,
             Err(e) => {

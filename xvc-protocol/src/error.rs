@@ -37,13 +37,13 @@ impl From<ParseVersionError> for ReadError {
     }
 }
 
-impl<'a> From<crate::codec::ParseErr<'a>> for ReadError {
-    fn from(value: crate::codec::ParseErr<'a>) -> Self {
+impl<'a> From<crate::codec::ParseErr> for ReadError {
+    fn from(value: crate::codec::ParseErr) -> Self {
         match value {
             // TODO: this shouldn't panic
             ParseErr::Incomplete => panic!("Incomplete read error"),
             ParseErr::InvalidCommand(items) => {
-                ReadError::InvalidCommand(String::from_utf8_lossy(items).to_string())
+                ReadError::InvalidCommand(String::from_utf8_lossy(&items).to_string())
             }
             ParseErr::TooManyBytes { max, got } => ReadError::TooManyBytes { max, need: got },
             ParseErr::Utf8Error(utf8_error) => {

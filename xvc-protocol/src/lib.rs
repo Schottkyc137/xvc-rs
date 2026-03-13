@@ -89,6 +89,9 @@ pub mod protocol;
 pub use protocol::*;
 pub mod codec;
 
+// re-export bytes
+pub use bytes::{Bytes, BytesMut};
+
 #[cfg(feature = "std")]
 extern crate std;
 #[cfg(feature = "std")]

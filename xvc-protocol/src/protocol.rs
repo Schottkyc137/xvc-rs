@@ -1,5 +1,7 @@
 use core::{fmt::Display, str::FromStr};
 
+use bytes::Bytes;
+
 use crate::error::ParseVersionError;
 
 /// The version of the protocol.
@@ -88,7 +90,6 @@ fn incorrect_version_from_str() {
 /// For each message, the client is expected to send the message and wait for a response from the server.
 /// The server needs to process each message in the order received and promptly provide a response.
 /// For the XVC 1.0 protocol, only one connection is assumed.
-#[cfg(feature = "std")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Message {
     /// Requests info from the server. This is used to determine protocol capabilities of the server.
@@ -102,10 +103,10 @@ pub enum Message {
         num_bits: u32,
         /// a byte sized vector with all the TMS data.
         /// The vector is num_bits and rounds up to the nearest byte.
-        tms: std::boxed::Box<[u8]>,
+        tms: Bytes,
         /// a byte sized vector with all the TDI data.
         /// The vector is num_bits and rounds up to the nearest byte.
-        tdi: std::boxed::Box<[u8]>,
+        tdi: Bytes,
     },
 }
 

@@ -4,6 +4,8 @@ use std::{
     prelude::v1::*,
 };
 
+use bytes::{Bytes, BytesMut};
+
 use crate::{
     Message, XvcCommand, XvcInfo,
     codec::{ParseErr, SetTck, Shift},
@@ -29,7 +31,7 @@ use crate::{
 /// assert!(matches!(msg, Message::GetInfo));
 /// ```
 pub struct Decoder {
-    buf: Vec<u8>,
+    buf: BytesMut,
     max: usize,
 }
 
@@ -41,7 +43,7 @@ impl Decoder {
     /// `max_size` a `ReadError::TooManyBytes` is returned when reading.
     pub fn new(max_size: usize) -> Self {
         Self {
-            buf: Vec::new(),
+            buf: BytesMut::with_capacity(max_size),
             max: max_size,
         }
     }
@@ -94,8 +96,8 @@ impl Decoder {
     pub fn read_xvc_info(&mut self, reader: &mut impl Read) -> Result<XvcInfo, ReadError> {
         self.buf.clear();
         loop {
-            match XvcInfo::parse(&self.buf) {
-                Ok((frame, _)) => {
+            match XvcInfo::parse(&mut self.buf.clone().freeze()) {
+                Ok(frame) => {
                     return Ok(frame);
                 }
                 Err(ParseErr::Incomplete) => {
@@ -124,8 +126,8 @@ impl Decoder {
     /// ```
     pub fn read_message(&mut self, reader: &mut impl Read) -> Result<Message, ReadError> {
         self.buf.clear();
-        let (cmd, size) = loop {
-            match XvcCommand::parse(&self.buf) {
+        let cmd = loop {
+            match XvcCommand::parse(&mut self.buf.clone().freeze()) {
                 Ok(cmd) => {
                     break cmd;
                 }
@@ -138,8 +140,8 @@ impl Decoder {
         match cmd {
             XvcCommand::GetInfo => Ok(Message::GetInfo),
             XvcCommand::SetTck => loop {
-                match SetTck::parse(&self.buf[size..]) {
-                    Ok((tck, _)) => {
+                match SetTck::parse(&mut self.buf) {
+                    Ok(tck) => {
                         return Ok(Message::SetTck {
                             period_ns: tck.period(),
                         });
@@ -151,12 +153,12 @@ impl Decoder {
                 }
             },
             XvcCommand::Shift => loop {
-                match Shift::parse(&self.buf[size..], self.max) {
-                    Ok((shift, _)) => {
+                match Shift::parse(&mut self.buf, self.max) {
+                    Ok(shift) => {
                         return Ok(Message::Shift {
                             num_bits: shift.num_bits(),
-                            tms: shift.tms().into(),
-                            tdi: shift.tdi().into(),
+                            tms: Bytes::copy_from_slice(shift.tms()),
+                            tdi: Bytes::copy_from_slice(shift.tdi()),
                         });
                     }
                     Err(ParseErr::Incomplete) => {
@@ -370,8 +372,8 @@ mod test {
 
         let cmd = Message::Shift {
             num_bits,
-            tms: tms.clone(),
-            tdi: tdi.clone(),
+            tms: Bytes::copy_from_slice(&tms),
+            tdi: Bytes::copy_from_slice(&tdi),
         };
         let mut out = Vec::new();
         cmd.write_to(&mut out).unwrap();
@@ -724,8 +726,8 @@ mod test {
     fn write_shift_zero_bits() {
         let cmd = Message::Shift {
             num_bits: 0,
-            tms: Box::new([]),
-            tdi: Box::new([]),
+            tms: Bytes::from_static(&[]),
+            tdi: Bytes::from_static(&[]),
         };
         let mut out = Vec::new();
         cmd.write_to(&mut out).unwrap();
@@ -739,8 +741,8 @@ mod test {
     fn write_shift_max_bits() {
         let cmd = Message::Shift {
             num_bits: u32::MAX,
-            tms: Box::new([0xFF; 512]),
-            tdi: Box::new([0xAA; 512]),
+            tms: Bytes::from_static(&[0xFF; 512]),
+            tdi: Bytes::from_static(&[0xAA; 512]),
         };
         let mut out = Vec::new();
         cmd.write_to(&mut out).unwrap();
@@ -837,8 +839,8 @@ mod test {
         let num_bytes = (num_bits / 8) as usize;
         let original = Message::Shift {
             num_bits,
-            tms: vec![0xAA; num_bytes].into_boxed_slice(),
-            tdi: vec![0x55; num_bytes].into_boxed_slice(),
+            tms: Bytes::copy_from_slice(&vec![0xAA; num_bytes]),
+            tdi: Bytes::copy_from_slice(&vec![0x55; num_bytes]),
         };
         let mut buffer = Vec::new();
         original.write_to(&mut buffer).unwrap();

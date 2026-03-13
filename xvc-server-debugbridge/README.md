@@ -8,13 +8,14 @@ Linux-specific backend implementations of the XVC (Xilinx Virtual Cable) server 
 - **Multiple Backends**:
   - **Ioctl Driver**: Kernel driver communication via ioctl syscalls
   - **UIO Driver**: Userspace I/O for memory-mapped FPGA interfaces
+  - **DevMem Driver**: Userspace I/O for raw memory-mapped access
 
 ## Usage
 
 This crate provides a command-line server binary:
 
 ```bash
-# Automatically select the right driver
+# Automatically choose a driver
 xvc-bridge
 
 # Start using the kernel driver
@@ -22,6 +23,9 @@ xvc-bridge kernel-driver /dev/xilinx_xvc_driver
 
 # Start using the UIO driver
 xvc-bridge uio-driver /dev/uio0
+
+# Start using the DevMem driver
+xvc-bridge dev-mem-driver 0xAA000000
 ```
 
 See `xvc-bridge --help` for all available options.

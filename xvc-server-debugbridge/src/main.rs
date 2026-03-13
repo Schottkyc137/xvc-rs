@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Parser;
+use clap_num::maybe_hex;
 use env_logger::Env;
 use xvc_server::{
     XvcServer,
@@ -25,6 +26,7 @@ use xvc_server::{
 const DEFAULT_TIMEOUT_US: u64 = 1000;
 
 #[derive(Parser, Eq, PartialEq, Clone)]
+#[allow(clippy::enum_variant_names)]
 enum DeviceImpl {
     KernelDriver {
         path: Option<PathBuf>,
@@ -38,6 +40,20 @@ enum DeviceImpl {
             default_value = "1000"
         )]
         poll_timeout_us: u64,
+    },
+    DevMemDriver {
+        /// Start address of the memory mapped region
+        #[clap(value_parser=maybe_hex::<u64>)]
+        address: u64,
+        #[arg(
+            short,
+            long,
+            help = "The timeout in microseconds",
+            default_value = "1000"
+        )]
+        poll_timeout_us: u64,
+        #[arg(short, long)]
+        path: Option<PathBuf>,
     },
 }
 
@@ -159,9 +175,30 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
             server.listen(addr)?;
         }
+        Some(DeviceImpl::DevMemDriver {
+            path,
+            address,
+            poll_timeout_us,
+        }) => {
+            use crate::backends::devmem::DevMemBackend;
+
+            let poll_timeout = Duration::from_micros(poll_timeout_us);
+
+            let dev_mem = match path {
+                Some(path) => DevMemBackend::new_with_path(path, address as i64, poll_timeout),
+                None => DevMemBackend::new(address as i64, poll_timeout),
+            }?;
+
+            log::info!(
+                "Initializing DevMem driver server using address 0x{:.x}",
+                address
+            );
+            let server = Server::new(dev_mem, config);
+            server.listen(addr)?;
+        }
         None => {
             println!(
-                "No debug bridge could be auto detected. Use xvc-server kernel-driver <path> or xvc-server uio-driver <path> to manually specify a driver."
+                "No debug bridge could be auto detected. Use xvc-server kernel-driver <path>, xvc-server uio-driver <path>, or xvc-server dev-mem-driver <address> to manually specify a driver."
             )
         }
     }

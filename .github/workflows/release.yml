@@ -81,6 +81,7 @@ jobs:
         with:
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           check-repo: false
+          ignore-unpublished-changes: true
 
       - name: List published crates
         if: fromJSON(steps.publish.outputs.published).*

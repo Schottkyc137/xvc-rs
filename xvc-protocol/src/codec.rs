@@ -259,7 +259,10 @@ mod tests {
     #[test]
     fn xvc_info_incomplete_no_newline() {
         let mut buf: &[u8] = b"xvcServer_v1.0:4"; // no newline
-        assert!(matches!(XvcInfo::parse(&mut buf), Err(ParseErr::Incomplete)));
+        assert!(matches!(
+            XvcInfo::parse(&mut buf),
+            Err(ParseErr::Incomplete)
+        ));
     }
 
     #[test]
@@ -366,8 +369,7 @@ mod tests {
         ));
 
         let mut buf: &[u8] = &[0xAAu8; 4];
-        let slice =
-            Shift::parse_tdi_or_tms(&mut buf, 4, 4).expect("should parse all bytes");
+        let slice = Shift::parse_tdi_or_tms(&mut buf, 4, 4).expect("should parse all bytes");
         assert_eq!(&slice[..], &[0xAAu8; 4]);
         assert!(buf.is_empty());
     }

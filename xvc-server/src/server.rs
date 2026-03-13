@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::XvcServer;
-use xvc_protocol::{error::ReadError, rw::Decoder};
 use xvc_protocol::{Message, Version, XvcInfo};
+use xvc_protocol::{error::ReadError, rw::Decoder};
 
 #[derive(Debug, Clone)]
 pub struct Config {

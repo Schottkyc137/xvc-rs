@@ -110,9 +110,13 @@ impl XvcClient {
     /// # Returns
     ///
     /// Test Data Out vector from the JTAG chain of the same length as `tms` and `tdi`.
-    pub fn shift(&mut self, num_bits: u32, tms: Box<[u8]>, tdi: Box<[u8]>) -> io::Result<Box<[u8]>> {
-        Message::Shift { num_bits, tms, tdi }
-        .write_to(&mut self.tcp)?;
+    pub fn shift(
+        &mut self,
+        num_bits: u32,
+        tms: Box<[u8]>,
+        tdi: Box<[u8]>,
+    ) -> io::Result<Box<[u8]>> {
+        Message::Shift { num_bits, tms, tdi }.write_to(&mut self.tcp)?;
         let mut buf = vec![0; num_bits.div_ceil(8) as usize];
         self.tcp.read_exact(&mut buf)?;
         Ok(buf.into_boxed_slice())

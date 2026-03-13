@@ -17,7 +17,10 @@ use std::{fs::OpenOptions, io, num::NonZero, path::Path, ptr::NonNull, time::Dur
 
 use nix::sys::mman::{MapFlags, ProtFlags, mmap, munmap};
 
-use crate::{XvcServer, backends::memory_mapped::{MAP_SIZE, MemoryMappedBackend}};
+use crate::{
+    XvcServer,
+    backends::memory_mapped::{MAP_SIZE, MemoryMappedBackend},
+};
 
 /// Debug bridge driver based on a Uio device
 pub struct UioDriverBackend(MemoryMappedBackend);

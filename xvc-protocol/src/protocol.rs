@@ -144,3 +144,11 @@ impl Default for XvcInfo {
         }
     }
 }
+
+/// Possible commands that are known to the XVC protocol.
+#[derive(Eq, PartialEq, Clone, Debug)]
+pub enum XvcCommand {
+    GetInfo,
+    SetTck,
+    Shift,
+}

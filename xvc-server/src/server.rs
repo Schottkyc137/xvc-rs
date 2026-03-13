@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::XvcServer;
-use xvc_protocol::error::ReadError;
+use xvc_protocol::{error::ReadError, rw::Decoder};
 use xvc_protocol::{Message, Version, XvcInfo};
 
 #[derive(Debug, Clone)]
@@ -100,8 +100,10 @@ impl<T: XvcServer> Server<T> {
         tcp.set_read_timeout(Some(self.config.read_write_timeout))?;
         tcp.set_write_timeout(Some(self.config.read_write_timeout))?;
 
+        let mut decoder = Decoder::new(self.config.max_vector_size as usize);
+
         loop {
-            match Message::from_reader(&mut tcp, self.config.max_vector_size as usize) {
+            match decoder.read_message(&mut tcp) {
                 Ok(message) => self.process_message(message, &mut tcp)?,
                 Err(ReadError::IoError(err)) if err.kind() == ErrorKind::TimedOut => {
                     log::warn!("Client read timeout, closing connection");
@@ -143,7 +145,7 @@ impl<T: XvcServer> Server<T> {
                 );
                 log::trace!("Shift TMS data: {:02x?}", &tms[..]);
                 log::trace!("Shift TDI data: {:02x?}", &tdi[..]);
-                let tdo = self.server.shift(num_bits, tms, tdi);
+                let tdo = self.server.shift(num_bits, &tms, &tdi);
                 log::trace!("Shift result TDO data: {:02x?}", &tdo[..]);
                 tcp.write_all(&tdo)?;
             }

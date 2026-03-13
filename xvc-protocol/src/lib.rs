@@ -86,5 +86,6 @@
 
 pub mod protocol;
 pub use protocol::*;
-pub mod codec;
+pub(crate) mod codec;
 pub mod error;
+pub mod rw;

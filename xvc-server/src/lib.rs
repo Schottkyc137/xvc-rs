@@ -157,5 +157,5 @@ pub trait XvcServer {
     ///
     /// The XVC 1.0 protocol does not support error reporting for shift operations.
     /// Implementations should return an empty box on error rather than propagating errors.
-    fn shift(&self, num_bits: u32, tms: Box<[u8]>, tdi: Box<[u8]>) -> Box<[u8]>;
+    fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8]) -> Box<[u8]>;
 }

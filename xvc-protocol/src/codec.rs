@@ -1,314 +1,405 @@
-/// Read and write implementations for the protocol messages
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::{num::ParseIntError, str::Utf8Error};
 
 use crate::{
-    error::ReadError,
-    protocol::{Message, Version, XvcInfo},
+    XvcCommand,
+    error::ParseVersionError,
+    protocol::{Version, XvcInfo},
 };
 
-const XVC_INFO_PREFIX: &[u8] = b"xvcServer";
+const XVC_SERVER_PREFIX: &[u8] = b"xvcServer_v";
 
-impl XvcInfo {
-    pub fn write_to(&self, writer: &mut impl Write) -> io::Result<()> {
-        writeln!(
-            writer,
-            "xvcServer_v{}:{}",
-            self.version(),
-            self.max_vector_len()
-        )
+pub(crate) const CMD_GET_INFO: &[u8] = b"getinfo:";
+pub(crate) const CMD_SET_TCK: &[u8] = b"settck:";
+pub(crate) const CMD_SHIFT: &[u8] = b"shift:";
+
+/// A lightweight cursor over a borrowed byte slice.
+struct SliceReader<'a>(&'a [u8]);
+
+impl<'a> SliceReader<'a> {
+    fn remaining(&self) -> usize {
+        self.0.len()
     }
 
-    pub fn from_reader(reader: &mut impl Read) -> Result<XvcInfo, ReadError> {
-        let mut buf_reader = BufReader::with_capacity(32, reader);
-        let mut line = Vec::with_capacity(32);
-        let _ = buf_reader.read_until(b'\n', &mut line)?;
+    fn advance(&mut self, n: usize) {
+        self.0 = &self.0[n..];
+    }
 
-        // Remove trailing newline
-        let mut line = line.trim_ascii_end();
+    fn get_u32_le(&mut self) -> u32 {
+        let v = u32::from_le_bytes([self.0[0], self.0[1], self.0[2], self.0[3]]);
+        self.advance(4);
+        v
+    }
 
-        // Parse format: "xvcServer_v{version}:{max_vector_len_bytes}"
-        if !line.starts_with(XVC_INFO_PREFIX) {
-            return Err(ReadError::InvalidFormat(
-                "Invalid prefix in info message".to_string(),
-            ));
-        }
+    fn copy_to_boxed_slice(&mut self, n: usize) -> Box<[u8]> {
+        let out: Box<[u8]> = self.0[..n].into();
+        self.advance(n);
+        out
+    }
+}
 
-        line = &line[XVC_INFO_PREFIX.len()..];
-        if line[0] != b'_' {
-            return Err(ReadError::InvalidFormat(
-                "Missing '_' separator".to_string(),
-            ));
-        }
-
-        line = &line[1..];
-        if line[0] != b'v' {
-            return Err(ReadError::InvalidFormat(
-                "Version must start with 'v".to_string(),
-            ));
-        }
-
-        line = &line[1..];
-        let colon_index = line.iter().position(|l| *l == b':').ok_or_else(|| {
-            ReadError::InvalidFormat("Missing ':' separator in info message".to_string())
-        })?;
-
-        let (version_part, rest) = line.split_at(colon_index);
-        let version = str::from_utf8(version_part)?.parse::<Version>()?;
-
-        let max_vector_len = str::from_utf8(&rest[1..])?.parse::<u32>()?;
-
+impl XvcInfo {
+    pub fn parse(buf: &mut &[u8]) -> ParseResult<XvcInfo> {
+        let Some(newline_index) = buf.iter().position(|b| *b == b'\n') else {
+            return Err(ParseErr::Incomplete);
+        };
+        let line = &buf[..newline_index];
+        *buf = &buf[newline_index + 1..];
+        let rest = line
+            .strip_prefix(XVC_SERVER_PREFIX)
+            .ok_or_else(|| ParseErr::InvalidCommand(line.into()))?;
+        let colon_index = rest
+            .iter()
+            .position(|byte| *byte == b':')
+            .ok_or_else(|| ParseErr::InvalidCommand(line.into()))?;
+        let version = core::str::from_utf8(&rest[..colon_index])?.parse::<Version>()?;
+        let max_vector_len = core::str::from_utf8(&rest[colon_index + 1..])?.parse::<u32>()?;
         Ok(XvcInfo::new(version, max_vector_len))
     }
 }
 
-#[test]
-fn write_server_info() {
-    let mut out = Vec::new();
-    XvcInfo::default().write_to(&mut out).unwrap();
-    assert_eq!(out, b"xvcServer_v1.0:10485760\n".to_vec());
+/// Errors that happen while parsing a command.
+/// Note that `ParseErr::Incomplete` is usually used to indicate
+/// upstream that it should increase the buffer size and re-try.
+#[derive(Eq, PartialEq, Clone, Debug)]
+pub enum ParseErr {
+    /// The buffer is too small to parse the message.
+    Incomplete,
+    /// A command was recognized, but it does not match any known command.
+    InvalidCommand(Box<[u8]>),
+    /// A command requested more size than is available.
+    /// This can happen in the `Shift` command when the passed `tdi` or `tms`
+    /// vectors are larger than the maximum size negotiated in the beginning.
+    TooManyBytes { max: usize, got: usize },
+    /// Conversion to UTF-8 failed
+    Utf8Error(Utf8Error),
+    /// Parsing an integer failed
+    ParseIntError(ParseIntError),
+    /// Parsing a version failed
+    ParseVersionError(ParseVersionError),
 }
 
-#[test]
-fn read_server_info() {
-    let data = b"xvcServer_v1.0:32\n";
-    let mut cursor = std::io::Cursor::new(data);
-    let info = XvcInfo::from_reader(&mut cursor).unwrap();
-    assert_eq!(info.version(), Version::V1_0);
-    assert_eq!(info.max_vector_len(), 32)
+impl From<Utf8Error> for ParseErr {
+    fn from(value: Utf8Error) -> Self {
+        ParseErr::Utf8Error(value)
+    }
 }
 
-impl Message {
-    const CMD_NAME_GET_INFO: &[u8; 7] = b"getinfo";
-    const CMD_NAME_SET_TCK: &[u8; 6] = b"settck";
-    const CMD_NAME_SHIFT: &[u8; 5] = b"shift";
-    const CMD_DELIMITER: u8 = b':';
+impl From<ParseIntError> for ParseErr {
+    fn from(value: ParseIntError) -> Self {
+        ParseErr::ParseIntError(value)
+    }
+}
 
-    pub fn from_reader(
-        reader: &mut impl Read,
-        max_shift_bytes: usize,
-    ) -> Result<Message, ReadError> {
-        // Buffer must accommodate: "shift:" (5) + num_bits (4) = 13 bytes minimum
-        let mut buf = [0u8; 16];
-        // read 2 bytes into the buffer
-        reader.read_exact(&mut buf[..2])?;
-        match &buf[..2] {
-            b"ge" => {
-                reader.read_exact(&mut buf[2..Self::CMD_NAME_GET_INFO.len() + 1])?;
-                if &buf[..Self::CMD_NAME_GET_INFO.len()] != Self::CMD_NAME_GET_INFO
-                    || buf[Self::CMD_NAME_GET_INFO.len()] != Self::CMD_DELIMITER
-                {
-                    return Err(ReadError::InvalidCommand(
-                        String::from_utf8_lossy(&buf).to_string(),
-                    ));
-                }
-                Ok(Message::GetInfo)
-            }
-            b"se" => {
-                reader.read_exact(&mut buf[2..Self::CMD_NAME_SET_TCK.len() + 1 + 4])?;
-                if &buf[..Self::CMD_NAME_SET_TCK.len()] != Self::CMD_NAME_SET_TCK
-                    || buf[Self::CMD_NAME_SET_TCK.len()] != Self::CMD_DELIMITER
-                {
-                    return Err(ReadError::InvalidCommand(
-                        String::from_utf8_lossy(&buf).to_string(),
-                    ));
-                }
-                let period = u32::from_le_bytes(
-                    buf[Self::CMD_NAME_SET_TCK.len() + 1..Self::CMD_NAME_SET_TCK.len() + 5]
-                        .try_into()
-                        .unwrap(),
-                );
-                Ok(Message::SetTck { period_ns: period })
-            }
-            b"sh" => {
-                reader.read_exact(&mut buf[2..Self::CMD_NAME_SHIFT.len() + 1 + 4])?;
-                if &buf[..Self::CMD_NAME_SHIFT.len()] != Self::CMD_NAME_SHIFT
-                    || buf[Self::CMD_NAME_SHIFT.len()] != Self::CMD_DELIMITER
-                {
-                    return Err(ReadError::InvalidCommand(
-                        String::from_utf8_lossy(&buf).to_string(),
-                    ));
-                }
-                let num_bits = u32::from_le_bytes(
-                    buf[Self::CMD_NAME_SHIFT.len() + 1..Self::CMD_NAME_SHIFT.len() + 5]
-                        .try_into()
-                        .unwrap(),
-                );
-                let num_bytes = num_bits.div_ceil(8_u32) as usize;
-                if num_bytes > max_shift_bytes {
-                    return Err(ReadError::TooManyBytes {
-                        max: max_shift_bytes,
-                        got: num_bytes,
-                    });
-                }
-                let mut tms_vector = vec![0_u8; num_bytes].into_boxed_slice();
-                reader.read_exact(&mut tms_vector[..])?;
-                let mut tdi_vector = vec![0_u8; num_bytes].into_boxed_slice();
-                reader.read_exact(&mut tdi_vector[..])?;
-                Ok(Message::Shift {
-                    num_bits,
-                    tms: tms_vector,
-                    tdi: tdi_vector,
-                })
-            }
-            _ => Err(ReadError::InvalidCommandPrefix(
-                String::from_utf8_lossy(&buf[..2]).to_string(),
-            )),
+impl From<ParseVersionError> for ParseErr {
+    fn from(value: ParseVersionError) -> Self {
+        ParseErr::ParseVersionError(value)
+    }
+}
+
+pub type ParseResult<T> = core::result::Result<T, ParseErr>;
+
+impl XvcCommand {
+    /// Parse a command from a buffer.
+    ///
+    /// # Example
+    /// ```
+    /// use xvc_protocol::{XvcCommand};
+    ///
+    /// let mut buf: &[u8] = b"getinfo:";
+    /// let command = XvcCommand::parse(&mut buf).expect("Parsing a large enough buffer should not fail");
+    /// assert_eq!(command, XvcCommand::GetInfo);
+    /// assert_eq!(buf.len(), 0);
+    /// ```
+    ///
+    /// If the buffer is not large enough, `ParseErr::Incomplete` is returned.
+    /// This usually indicates to the caller to read more bytes into the buffer:
+    ///
+    /// A buffer that is too large is permitted. After a successful parse the
+    /// buffer is advanced past the consumed command bytes:
+    /// ```
+    /// use xvc_protocol::XvcCommand;
+    ///
+    /// let mut buf: &[u8] = b"settck:\x64";
+    /// let command = XvcCommand::parse(&mut buf).expect("Parsing a large enough buffer should not fail");
+    /// assert_eq!(command, XvcCommand::SetTck);
+    /// assert_eq!(buf.len(), 1);
+    /// ```
+    pub fn parse(buf: &mut &[u8]) -> ParseResult<XvcCommand> {
+        let (cmd, n) = if buf.starts_with(CMD_GET_INFO) {
+            (XvcCommand::GetInfo, CMD_GET_INFO.len())
+        } else if buf.starts_with(CMD_SET_TCK) {
+            (XvcCommand::SetTck, CMD_SET_TCK.len())
+        } else if buf.starts_with(CMD_SHIFT) {
+            (XvcCommand::Shift, CMD_SHIFT.len())
+        } else {
+            return if CMD_GET_INFO.starts_with(buf)
+                || CMD_SET_TCK.starts_with(buf)
+                || CMD_SHIFT.starts_with(buf)
+            {
+                Err(ParseErr::Incomplete)
+            } else {
+                Err(ParseErr::InvalidCommand((*buf).into()))
+            };
+        };
+        *buf = &buf[n..];
+        Ok(cmd)
+    }
+}
+
+pub struct SetTck {
+    period: u32,
+}
+
+impl SetTck {
+    pub fn period(&self) -> u32 {
+        self.period
+    }
+}
+
+impl SetTck {
+    pub fn parse(buf: &mut &[u8]) -> ParseResult<Self> {
+        let mut r = SliceReader(buf);
+        if r.remaining() < 4 {
+            return Err(ParseErr::Incomplete);
         }
+        let period = r.get_u32_le();
+        *buf = r.0;
+        Ok(SetTck { period })
+    }
+}
+
+pub struct Shift {
+    num_bits: u32,
+    tdi: Box<[u8]>,
+    tms: Box<[u8]>,
+}
+
+impl Shift {
+    pub fn num_bits(&self) -> u32 {
+        self.num_bits
     }
 
-    pub fn write_to(&self, writer: &mut impl Write) -> io::Result<()> {
-        match self {
-            Message::GetInfo => {
-                writer.write_all(Self::CMD_NAME_GET_INFO)?;
-                writer.write_all(&[Self::CMD_DELIMITER])
-            }
-            Message::SetTck {
-                period_ns: period_in_ns,
-            } => {
-                writer.write_all(Self::CMD_NAME_SET_TCK)?;
-                writer.write_all(&[Self::CMD_DELIMITER])?;
-                writer.write_all(&period_in_ns.to_le_bytes())
-            }
-            Message::Shift {
-                num_bits,
-                tms: tms_vector,
-                tdi: tdi_vector,
-            } => {
-                writer.write_all(Self::CMD_NAME_SHIFT)?;
-                writer.write_all(&[Self::CMD_DELIMITER])?;
-                writer.write_all(&num_bits.to_le_bytes())?;
-                writer.write_all(tms_vector)?;
-                writer.write_all(tdi_vector)
-            }
+    #[cfg(test)]
+    pub fn tdi(&self) -> &[u8] {
+        &self.tdi
+    }
+
+    #[cfg(test)]
+    pub fn tms(&self) -> &[u8] {
+        &self.tms
+    }
+
+    pub fn into_tms_tdi(self) -> (Box<[u8]>, Box<[u8]>) {
+        (self.tms, self.tdi)
+    }
+}
+
+impl Shift {
+    pub fn parse_num_bits(buf: &mut &[u8]) -> ParseResult<u32> {
+        let mut r = SliceReader(buf);
+        if r.remaining() < 4 {
+            return Err(ParseErr::Incomplete);
         }
+        let n = r.get_u32_le();
+        *buf = r.0;
+        Ok(n)
+    }
+
+    /// This is an internal convenience method when parsing the `Shift` command.
+    pub fn parse_tdi_or_tms(
+        buf: &mut &[u8],
+        num_bytes: usize,
+        max_len: usize,
+    ) -> ParseResult<Box<[u8]>> {
+        if num_bytes > max_len {
+            return Err(ParseErr::TooManyBytes {
+                max: max_len,
+                got: num_bytes,
+            });
+        }
+        let mut r = SliceReader(buf);
+        if r.remaining() < num_bytes {
+            return Err(ParseErr::Incomplete);
+        }
+        let out = r.copy_to_boxed_slice(num_bytes);
+        *buf = r.0;
+        Ok(out)
+    }
+
+    pub fn parse(buf: &mut &[u8], max_len: usize) -> ParseResult<Shift> {
+        let num_bits = Self::parse_num_bits(buf)?;
+        let num_bytes = num_bits.div_ceil(8) as usize;
+        let tms = Self::parse_tdi_or_tms(buf, num_bytes, max_len)?;
+        let tdi = Self::parse_tdi_or_tms(buf, num_bytes, max_len)?;
+        Ok(Shift { num_bits, tdi, tms })
     }
 }
 
 #[cfg(test)]
-mod test {
-    use crate::error::ReadError;
-    use crate::protocol::Message;
-    use std::io::Cursor;
+mod tests {
+    use std::vec::Vec;
 
-    const DEFAULT_MAX_SHIFT_BYTES: usize = 1024;
+    use super::*;
 
     #[test]
-    fn read_getinfo() {
-        let data = b"getinfo:".to_vec();
-        let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
-            Message::GetInfo => {}
-            _ => panic!("expected GetInfo"),
-        }
+    fn parses_valid_xvc_info() {
+        let mut info1: &[u8] = b"xvcServer_v1.0:4\n";
+        assert_eq!(
+            XvcInfo::parse(&mut info1),
+            Ok(XvcInfo::new(Version::new(1, 0), 4))
+        );
+
+        let mut info2: &[u8] = b"xvcServer_v10.2:24\n";
+        assert_eq!(
+            XvcInfo::parse(&mut info2),
+            Ok(XvcInfo::new(Version::new(10, 2), 24))
+        );
     }
 
     #[test]
-    fn write_getinfo() {
-        let mut out = Vec::new();
-        Message::GetInfo.write_to(&mut out).unwrap();
-        assert_eq!(out, b"getinfo:".to_vec());
+    fn xvc_info_incomplete_no_newline() {
+        let mut buf: &[u8] = b"xvcServer_v1.0:4"; // no newline
+        assert!(matches!(XvcInfo::parse(&mut buf), Err(ParseErr::Incomplete)));
     }
 
     #[test]
-    fn read_settck() {
-        let period: u32 = 0x1234_5678;
-        let mut data = b"settck:".to_vec();
-        data.extend_from_slice(&period.to_le_bytes());
-        let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
-            Message::SetTck {
-                period_ns: period_in_ns,
-            } => assert_eq!(period_in_ns, period),
-            _ => panic!("expected SetTck"),
-        }
+    fn xvc_info_invalid_prefix() {
+        let mut buf: &[u8] = b"badprefix:1.0:4\n";
+        assert!(matches!(
+            XvcInfo::parse(&mut buf),
+            Err(ParseErr::InvalidCommand(_))
+        ));
     }
 
     #[test]
-    fn write_settck() {
-        let period: u32 = 0x1234_5678;
-        let mut out = Vec::new();
-        Message::SetTck { period_ns: period }
-            .write_to(&mut out)
-            .unwrap();
-        let mut expected = b"settck:".to_vec();
-        expected.extend_from_slice(&period.to_le_bytes());
-        assert_eq!(out, expected);
+    fn xvc_info_missing_colon() {
+        let mut buf: &[u8] = b"xvcServer_v1.0\n";
+        assert!(matches!(
+            XvcInfo::parse(&mut buf),
+            Err(ParseErr::InvalidCommand(_))
+        ));
     }
 
     #[test]
-    fn read_shift() {
-        let num_bits: u32 = 13; // 2 bytes
-        let num_bytes = num_bits.div_ceil(8) as usize;
-        let tms = vec![0xAAu8; num_bytes];
-        let tdi = vec![0x55u8; num_bytes];
-
-        let mut data = b"shift:".to_vec();
-        data.extend_from_slice(&num_bits.to_le_bytes());
-        data.extend_from_slice(&tms);
-        data.extend_from_slice(&tdi);
-
-        let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
-            Message::Shift {
-                num_bits: nb,
-                tms: tms_vector,
-                tdi: tdi_vector,
-            } => {
-                assert_eq!(nb, num_bits);
-                assert_eq!(&*tms_vector, &tms[..]);
-                assert_eq!(&*tdi_vector, &tdi[..]);
-            }
-            _ => panic!("expected Shift"),
-        }
+    fn xvc_info_malformed_version() {
+        let mut buf: &[u8] = b"xvcServer_v1.a:4\n";
+        assert!(matches!(
+            XvcInfo::parse(&mut buf),
+            Err(ParseErr::ParseVersionError(_))
+        ));
     }
 
     #[test]
-    fn write_shift() {
-        let num_bits: u32 = 13; // 2 bytes
-        let num_bytes = num_bits.div_ceil(8) as usize;
-        let tms = vec![0xAAu8; num_bytes].into_boxed_slice();
-        let tdi = vec![0x55u8; num_bytes].into_boxed_slice();
-
-        let cmd = Message::Shift {
-            num_bits,
-            tms: tms.clone(),
-            tdi: tdi.clone(),
-        };
-        let mut out = Vec::new();
-        cmd.write_to(&mut out).unwrap();
-
-        let mut expected = b"shift:".to_vec();
-        expected.extend_from_slice(&num_bits.to_le_bytes());
-        expected.extend_from_slice(&tms);
-        expected.extend_from_slice(&tdi);
-
-        assert_eq!(out, expected);
+    fn xvc_info_invalid_max_vector_len() {
+        let mut buf: &[u8] = b"xvcServer_v1.0:NaN\n";
+        assert!(matches!(
+            XvcInfo::parse(&mut buf),
+            Err(ParseErr::ParseIntError(_))
+        ));
     }
 
     #[test]
-    fn invalid_prefix() {
-        let data = b"xx".to_vec();
-        let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
-            Err(ReadError::InvalidCommandPrefix(p)) => assert_eq!(p, "xx"),
-            other => panic!("expected InvalidCommandPrefix, got {:?}", other),
-        }
+    fn xvc_command_parse_valid_and_rest() {
+        let mut buf: &[u8] = b"settck:\x64";
+        let cmd = XvcCommand::parse(&mut buf).expect("should parse settck");
+        assert_eq!(cmd, XvcCommand::SetTck);
+        assert_eq!(buf, b"\x64");
     }
 
     #[test]
-    fn too_many_bytes_shift() {
-        // force number of bytes to exceed MAX_SHIFT_BYTES
-        let num_bytes_exceed = 1024 + 1;
-        let num_bits = (num_bytes_exceed * 8) as u32;
-        let mut data = b"shift:".to_vec();
-        data.extend_from_slice(&num_bits.to_le_bytes());
-        let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, 1024) {
-            Err(ReadError::TooManyBytes { max, got }) => {
-                assert_eq!(max, 1024);
-                assert_eq!(got, num_bytes_exceed);
-            }
-            other => panic!("expected TooManyBytes, got {:?}", other),
-        }
+    fn xvc_command_parse_incomplete() {
+        let mut buf: &[u8] = b"getin";
+        assert!(matches!(
+            XvcCommand::parse(&mut buf),
+            Err(ParseErr::Incomplete)
+        ));
+    }
+
+    #[test]
+    fn xvc_command_parse_invalid() {
+        let mut buf: &[u8] = b"unknown:";
+        assert!(matches!(
+            XvcCommand::parse(&mut buf),
+            Err(ParseErr::InvalidCommand(_))
+        ));
+    }
+
+    #[test]
+    fn set_tck_parse_ok_and_incomplete() {
+        let mut buf: &[u8] = &[0x01u8, 0x00, 0x00, 0x00];
+        let set = SetTck::parse(&mut buf).expect("should parse period");
+        assert_eq!(set.period(), 1);
+        assert!(buf.is_empty());
+
+        let mut short: &[u8] = &[0u8, 0u8, 0u8];
+        assert!(matches!(
+            SetTck::parse(&mut short),
+            Err(ParseErr::Incomplete)
+        ));
+    }
+
+    #[test]
+    fn shift_parse_num_bits_behaviour() {
+        let mut short: &[u8] = &[0u8, 0, 0];
+        assert!(matches!(
+            Shift::parse_num_bits(&mut short),
+            Err(ParseErr::Incomplete)
+        ));
+        let mut v: &[u8] = &[0x0Cu8, 0, 0, 0]; // 12 bits
+        let num_bits = Shift::parse_num_bits(&mut v).expect("should parse num bits");
+        assert_eq!(num_bits, 12);
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn parse_tdi_or_tms_edge_cases() {
+        let mut buf: &[u8] = &[0u8; 4];
+        assert!(matches!(
+            Shift::parse_tdi_or_tms(&mut buf, 5, 4),
+            Err(ParseErr::TooManyBytes { .. })
+        ));
+
+        let mut buf: &[u8] = &[0u8; 1];
+        assert!(matches!(
+            Shift::parse_tdi_or_tms(&mut buf, 2, 4),
+            Err(ParseErr::Incomplete)
+        ));
+
+        let mut buf: &[u8] = &[0xAAu8; 4];
+        let slice =
+            Shift::parse_tdi_or_tms(&mut buf, 4, 4).expect("should parse all bytes");
+        assert_eq!(&slice[..], &[0xAAu8; 4]);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn shift_parse_ok() {
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(&12u32.to_le_bytes());
+        let tms = [0xAAu8, 0xBB];
+        let tdi = [0x11u8, 0x22];
+        buf.extend_from_slice(&tms);
+        buf.extend_from_slice(&tdi);
+
+        let mut slice: &[u8] = &buf;
+        let shift = Shift::parse(&mut slice, 4).expect("shift parse should succeed");
+        assert_eq!(shift.num_bits(), 12);
+        assert_eq!(shift.tms(), &tms);
+        assert_eq!(shift.tdi(), &tdi);
+        assert!(slice.is_empty());
+    }
+
+    #[test]
+    fn shift_parse_too_many_bytes_error() {
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(&16u32.to_le_bytes()); // 16 bits -> 2 bytes each
+        buf.extend_from_slice(&[0u8, 0u8]);
+        buf.extend_from_slice(&[0u8, 0u8]);
+
+        let mut slice: &[u8] = &buf;
+        assert!(matches!(
+            Shift::parse(&mut slice, 1),
+            Err(ParseErr::TooManyBytes { .. })
+        ));
     }
 }

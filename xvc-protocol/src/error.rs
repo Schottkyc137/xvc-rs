@@ -50,7 +50,7 @@ impl Display for ReadError {
                 write!(f, "Received invalid command with prefix {}", prefix)
             }
             ReadError::TooManyBytes { max, got } => {
-                write!(f, "Message too large! Maximum is {}, but gut {}", max, got)
+                write!(f, "Message too large! Maximum is {}, but got {}", max, got)
             }
         }
     }

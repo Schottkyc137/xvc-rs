@@ -4,11 +4,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(super) const MAP_SIZE: usize = 0x10000;
+
+// Word (u32) offsets into the memory-mapped register block
 const LENGTH_OFFSET: usize = 0;
-const TMS_REG_OFFSET: usize = 4;
-const TDI_REG_OFFSET: usize = 8;
-const TDO_REG_OFFSET: usize = 12;
-const CONTROL_REG_OFFSET: usize = 16;
+const TMS_REG_OFFSET: usize = 1;
+const TDI_REG_OFFSET: usize = 2;
+const TDO_REG_OFFSET: usize = 3;
+const CONTROL_REG_OFFSET: usize = 4;
 
 pub struct MemoryMappedBackend {
     pub mem: *mut u32,
@@ -75,21 +78,21 @@ impl MemoryMappedBackend {
             );
 
             let tdo = unsafe {
-                write_volatile(self.mem.add(LENGTH_OFFSET / 4), shift_num_bits);
+                write_volatile(self.mem.add(LENGTH_OFFSET), shift_num_bits);
                 write_volatile(
-                    self.mem.add(TMS_REG_OFFSET / 4),
+                    self.mem.add(TMS_REG_OFFSET),
                     u32_from_u8_slice(&tms[..shift_num_bytes as usize]),
                 );
                 write_volatile(
-                    self.mem.add(TDI_REG_OFFSET / 4),
+                    self.mem.add(TDI_REG_OFFSET),
                     u32_from_u8_slice(&tdi[..shift_num_bytes as usize]),
                 );
-                write_volatile(self.mem.add(CONTROL_REG_OFFSET / 4), 0x01);
+                write_volatile(self.mem.add(CONTROL_REG_OFFSET), 0x01);
 
                 let poll_until_ready = || {
                     let start = Instant::now();
                     while start.elapsed() < self.poll_timeout {
-                        if read_volatile(self.mem.add(CONTROL_REG_OFFSET / 4)) == 0 {
+                        if read_volatile(self.mem.add(CONTROL_REG_OFFSET)) == 0 {
                             return Ok(());
                         }
                     }
@@ -100,7 +103,7 @@ impl MemoryMappedBackend {
                 };
                 poll_until_ready()?;
 
-                &read_volatile(self.mem.add(TDO_REG_OFFSET / 4)).to_ne_bytes()
+                &read_volatile(self.mem.add(TDO_REG_OFFSET)).to_ne_bytes()
                     [..shift_num_bytes as usize]
             };
 

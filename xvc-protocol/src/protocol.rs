@@ -20,7 +20,7 @@ impl Version {
     }
 
     /// Returns the latest supported version
-    pub fn latest() -> Version {
+    pub const fn latest() -> Version {
         Version::V1_0
     }
 

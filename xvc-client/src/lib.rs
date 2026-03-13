@@ -32,7 +32,7 @@
 //! // Query server capabilities
 //! let info = client.get_info()?;
 //! println!("Server version: {}", info.version());
-//! println!("Max vector size: {} bytes", info.max_vector_size());
+//! println!("Max vector size: {} bytes", info.max_vector_len());
 //! ```
 //!
 //! ### Setting Clock Frequency

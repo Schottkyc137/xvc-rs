@@ -1,5 +1,5 @@
 use std::{
-    io::{ErrorKind, Write},
+    io::{self, ErrorKind, Write},
     net::{TcpListener, TcpStream, ToSocketAddrs},
     time::Duration,
 };
@@ -75,7 +75,7 @@ impl<T: XvcServer> Server<T> {
         Server { server, config }
     }
 
-    pub fn listen(&self, addr: impl ToSocketAddrs) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn listen(&self, addr: impl ToSocketAddrs) -> io::Result<()> {
         let listener = TcpListener::bind(addr)?;
         log::info!("Server listening for connections");
 
@@ -104,7 +104,7 @@ impl<T: XvcServer> Server<T> {
             match Message::from_reader(&mut tcp, self.config.max_vector_size as usize) {
                 Ok(message) => self.process_message(message, &mut tcp)?,
                 Err(ReadError::IoError(err)) if err.kind() == ErrorKind::TimedOut => {
-                    log::error!("Client read timeout, closing connection");
+                    log::warn!("Client read timeout, closing connection");
                     break;
                 }
                 Err(ReadError::IoError(err))

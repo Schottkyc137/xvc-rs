@@ -5,10 +5,11 @@
 //! ## Example Usage
 //!
 //! ```ignore
-//! use xvc_server_linux::device::UioDebugBridgeDriver;
+//! use xvc_server_debugbridge::backends::uio::UioDriverBackend;
 //! use xvc_server::server::{Server, Config};
+//! use std::time::Duration;
 //!
-//! let driver = UioDebugBridgeDriver::new("/dev/uio0")?;
+//! let driver = UioDriverBackend::new("/dev/uio0", Duration::from_micros(1000))?;
 //! let server = Server::new(driver, Config::default());
 //! server.listen("127.0.0.1:2542")?;
 //! ```
@@ -16,9 +17,7 @@ use std::{fs::OpenOptions, io, num::NonZero, path::Path, ptr::NonNull, time::Dur
 
 use nix::sys::mman::{MapFlags, ProtFlags, mmap, munmap};
 
-use crate::{XvcServer, backends::memory_mapped::MemoryMappedBackend};
-
-const MAP_SIZE: usize = 0x10000;
+use crate::{XvcServer, backends::memory_mapped::{MAP_SIZE, MemoryMappedBackend}};
 
 /// Debug bridge driver based on a Uio device
 pub struct UioDriverBackend(MemoryMappedBackend);

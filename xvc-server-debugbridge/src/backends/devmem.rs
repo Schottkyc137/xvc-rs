@@ -5,10 +5,11 @@
 //! ## Example Usage
 //!
 //! ```ignore
-//! use xvc_server_linux::device::UioDebugBridgeDriver;
+//! use xvc_server_debugbridge::backends::devmem::DevMemBackend;
 //! use xvc_server::server::{Server, Config};
+//! use std::time::Duration;
 //!
-//! let driver = UioDebugBridgeDriver::new("/dev/uio0")?;
+//! let driver = DevMemBackend::new(0xFF00_0000, Duration::from_micros(1000))?;
 //! let server = Server::new(driver, Config::default());
 //! server.listen("127.0.0.1:2542")?;
 //! ```
@@ -18,9 +19,7 @@ use std::{fs::OpenOptions, io, num::NonZero, path::Path, ptr::NonNull, time::Dur
 use nix::sys::mman::{MapFlags, ProtFlags, mmap, munmap};
 use xvc_server::XvcServer;
 
-use crate::backends::memory_mapped::MemoryMappedBackend;
-
-const MAP_SIZE: usize = 0x10000;
+use crate::backends::memory_mapped::{MAP_SIZE, MemoryMappedBackend};
 
 /// Debug bridge driver based on a Uio device
 pub struct DevMemBackend(MemoryMappedBackend);
@@ -35,12 +34,12 @@ impl DevMemBackend {
         address: i64,
         poll_timeout: Duration,
     ) -> io::Result<DevMemBackend> {
-        let deivce_path = path.as_ref();
-        log::debug!("Opening DevMem device: {}", deivce_path.display());
+        let device_path = path.as_ref();
+        log::debug!("Opening DevMem device: {}", device_path.display());
         let file = OpenOptions::new()
             .read(true)
             .write(true)
-            .open(deivce_path)?;
+            .open(device_path)?;
         log::debug!("DevMem file opened successfully");
 
         let mem = unsafe {
@@ -84,7 +83,7 @@ impl XvcServer for DevMemBackend {
         match self.0.shift_data(num_bits, &tms, &tdi) {
             Ok(result) => result,
             Err(e) => {
-                log::error!("MevMem shift error: {}", e);
+                log::error!("DevMem shift error: {}", e);
                 // The protocol supports no error handling, so we push an empty array.
                 Box::default()
             }

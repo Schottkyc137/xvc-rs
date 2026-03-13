@@ -6,12 +6,12 @@
 //! ## Example Usage
 //!
 //! ```ignore
-//! use xvc_server_linux::device::DebugBridgeDevice;
+//! use xvc_server_debugbridge::backends::kernel_driver::KernelDriverBackend;
 //! use xvc_server::server::{Server, Config};
 //!
-//! let driver = DebugBridgeDevice::new("/dev/xilinx_xvc_driver")?;
+//! let driver = KernelDriverBackend::new("/dev/xilinx_xvc_driver")?;
 //! let server = Server::new(driver, Config::default());
-//! server.listen("127.0.0.1:2542".parse()?)?;
+//! server.listen("127.0.0.1:2542")?;
 //! ```
 use nix::{ioctl_read_bad, ioctl_readwrite_bad};
 use std::{

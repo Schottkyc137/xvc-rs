@@ -24,8 +24,8 @@ jobs:
       - name: Extract version from Cargo.toml
         id: cargo
         run: |
-          VERSION=$(cargo metadata --format-version 1 --manifest-path xvc-server-debugbridge/Cargo.toml --no-deps \
-            | jq -r '.packages[0].version')
+          VERSION=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "xvc-server-debugbridge") | .version')
           echo "VERSION=$VERSION"
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 

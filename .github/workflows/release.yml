@@ -80,6 +80,7 @@ jobs:
         id: publish
         with:
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          check-repo: false
 
       - name: List published crates
         if: fromJSON(steps.publish.outputs.published).*

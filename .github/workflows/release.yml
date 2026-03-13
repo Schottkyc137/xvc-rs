@@ -73,6 +73,7 @@ jobs:
         with:
           executable-name: xvc-bridge
           target: aarch64-unknown-linux-gnu
+          changes-file: "" # No changelog file
 
       - name: Publish to crates.io
         env:

@@ -89,3 +89,5 @@ pub use protocol::*;
 pub(crate) mod codec;
 pub mod error;
 pub mod rw;
+#[cfg(feature = "tokio")]
+pub mod tokio_codec;

@@ -13,12 +13,18 @@ const TDI_REG_OFFSET: usize = 2;
 const TDO_REG_OFFSET: usize = 3;
 const CONTROL_REG_OFFSET: usize = 4;
 
+/// A backend that uses the memory-mapped AXI to JTAG bridge.
+/// Used by the UIO and the DevMem Backend.
 pub struct MemoryMappedBackend {
     pub mem: *mut u32,
     /// The driver must poll the Debug Bridge since there are no interrupt lines.
     /// This timeout defines how long a poll may take before issuing a timeout error.
     pub poll_timeout: Duration,
 }
+
+// SAFETY: `mem` points to a memory-mapped hardware register block that is
+// stable for the lifetime of the backend.
+unsafe impl Send for MemoryMappedBackend {}
 
 fn u32_from_u8_slice(slice: &[u8]) -> u32 {
     assert!(slice.len() <= 4);

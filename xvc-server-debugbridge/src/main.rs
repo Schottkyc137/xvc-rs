@@ -18,6 +18,8 @@ use std::time::Duration;
 use clap::Parser;
 use clap_num::maybe_hex;
 use env_logger::Env;
+use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 use xvc_server::{
     XvcServer,
     server::{Config, Server},
@@ -70,6 +72,17 @@ struct Args {
     device: Option<DeviceImpl>,
 }
 
+async fn run<T: XvcServer + Send + 'static>(
+    backend: T,
+    config: Config,
+    listener: TcpListener,
+    token: CancellationToken,
+) -> std::io::Result<()> {
+    Server::new(backend, config)
+        .listen_on(listener, token)
+        .await
+}
+
 /// Attempts to automatically find the path to the Debug Bridge kernel driver
 fn kernel_driver_path() -> Option<PathBuf> {
     let p = PathBuf::from("/dev/xilinx_xvc_driver");
@@ -103,7 +116,8 @@ fn uio_driver_path() -> Option<PathBuf> {
     None
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     log::info!("Starting XVC server");
 
@@ -114,7 +128,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     log::debug!("Server config: max_vector_size={}", config.max_vector_size);
 
     let addr = SocketAddr::new(args.ip, args.port);
-    log::info!("Binding to address: {}", addr);
 
     let device_impl = args.device.or_else(|| {
         if let Some(path) = kernel_driver_path() {
@@ -131,11 +144,32 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
+    let Some(device_impl) = device_impl else {
+        println!(
+            "No debug bridge could be auto detected. Use xvc-server kernel-driver <path>, xvc-server uio-driver <path>, or xvc-server dev-mem-driver <address> to manually specify a driver."
+        );
+        return Ok(());
+    };
+
+    let listener = TcpListener::bind(addr).await?;
+    log::info!("Listening on {}", addr);
+
+    let token = CancellationToken::new();
+    tokio::spawn({
+        let token = token.clone();
+        async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                log::info!("Received Ctrl+C, shutting down gracefully");
+                token.cancel();
+            }
+        }
+    });
+
     match device_impl {
-        Some(DeviceImpl::KernelDriver { path }) => {
+        DeviceImpl::KernelDriver { path } => {
             use crate::backends::kernel_driver::KernelDriverBackend;
 
-            let device_path = match path.or(kernel_driver_path()) {
+            let device_path = match path.or_else(kernel_driver_path) {
                 None => {
                     println!(
                         "No debug bridge could be detected. Explicitly specify a path using xvc-server kernel-driver <path> to manually specify a driver."
@@ -144,21 +178,25 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 Some(path) => path,
             };
-
             log::info!(
-                "Initializing kernel driver server from {}",
+                "Initializing kernel driver backend from {}",
                 device_path.display()
             );
-            let server = Server::new(KernelDriverBackend::new(device_path)?, config);
-            server.listen(addr)?
+            run(
+                KernelDriverBackend::new(device_path)?,
+                config,
+                listener,
+                token,
+            )
+            .await?;
         }
-        Some(DeviceImpl::UioDriver {
+        DeviceImpl::UioDriver {
             path,
             poll_timeout_us,
-        }) => {
+        } => {
             use crate::backends::uio::UioDriverBackend;
 
-            let uio_path = match path.or(uio_driver_path()) {
+            let uio_path = match path.or_else(uio_driver_path) {
                 None => {
                     println!(
                         "No debug bridge could be detected. Explicitly specify a path using xvc-server uio-driver <path> to manually specify a driver."
@@ -167,39 +205,35 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 Some(path) => path,
             };
-
-            log::info!("Initializing UIO driver server from {}", uio_path.display());
-            let server = Server::new(
+            log::info!(
+                "Initializing UIO driver backend from {}",
+                uio_path.display()
+            );
+            run(
                 UioDriverBackend::new(uio_path, Duration::from_micros(poll_timeout_us))?,
                 config,
-            );
-            server.listen(addr)?;
+                listener,
+                token,
+            )
+            .await?;
         }
-        Some(DeviceImpl::DevMemDriver {
+        DeviceImpl::DevMemDriver {
             path,
             address,
             poll_timeout_us,
-        }) => {
+        } => {
             use crate::backends::devmem::DevMemBackend;
 
             let poll_timeout = Duration::from_micros(poll_timeout_us);
-
             let dev_mem = match path {
                 Some(path) => DevMemBackend::new_with_path(path, address as i64, poll_timeout),
                 None => DevMemBackend::new(address as i64, poll_timeout),
             }?;
-
             log::info!(
-                "Initializing DevMem driver server using address 0x{:.x}",
+                "Initializing DevMem driver backend using address 0x{:.x}",
                 address
             );
-            let server = Server::new(dev_mem, config);
-            server.listen(addr)?;
-        }
-        None => {
-            println!(
-                "No debug bridge could be auto detected. Use xvc-server kernel-driver <path>, xvc-server uio-driver <path>, or xvc-server dev-mem-driver <address> to manually specify a driver."
-            )
+            run(dev_mem, config, listener, token).await?;
         }
     }
     Ok(())

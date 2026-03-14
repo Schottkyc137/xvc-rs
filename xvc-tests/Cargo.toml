@@ -1,0 +1,12 @@
+[package]
+name = "xvc-tests"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tokio-util = "0.7"
+xvc-client = { path = "../xvc-client" }
+xvc-protocol = { path = "../xvc-protocol" }
+xvc-server = { path = "../xvc-server" }

@@ -866,6 +866,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "xvc-tests"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "tokio-util",
+ "xvc-client",
+ "xvc-protocol",
+ "xvc-server",
+]
+
+[[package]]
 name = "zerocopy"
 version = "0.8.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"

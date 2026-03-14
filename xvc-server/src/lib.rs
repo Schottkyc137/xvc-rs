@@ -42,7 +42,7 @@
 //!
 //! Create a struct that implements the [`XvcServer`] trait:
 //!
-//! ```ignore
+//! ```no_run
 //! use xvc_server::XvcServer;
 //!
 //! struct MyDriver {
@@ -55,7 +55,7 @@
 //!         period_ns
 //!     }
 //!
-//!     fn shift(&self, num_bits: u32, tms: Box<[u8]>, tdi: Box<[u8]>) -> Box<[u8]> {
+//!     fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8]) -> Box<[u8]> {
 //!         // Perform JTAG shifting and return TDO data
 //!         Box::default()
 //!     }

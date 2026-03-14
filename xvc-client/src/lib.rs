@@ -48,10 +48,10 @@
 //! ```ignore
 //! // Perform an 8-bit JTAG shift
 //! let num_bits = 8;
-//! let tms = vec![0x00];
-//! let tdi = vec![0xA5];
+//! let tms = [0x00u8];
+//! let tdi = [0xA5u8];
 //!
-//! let tdo = client.shift(num_bits, tms.into_boxed_slice(), tdi.into_boxed_slice()).await?;
+//! let tdo = client.shift(num_bits, &tms, &tdi).await?;
 //! println!("TDO data: {:?}", tdo);
 //! ```
 //!

@@ -6,8 +6,11 @@
 //! ## Overview
 //!
 //! This crate extends [`xvc_server`](https://docs.rs/xvc-server/) with concrete implementations
-//! for Linux platforms. It provides two backend drivers to communicate with FPGA debug
-//! interfaces through the official kernel driver or memory-mapped device access via userspace I/O.
+//! for Linux platforms. It provides three backend drivers:
+//!
+//! - **kernel-driver**: communicates via the Xilinx kernel driver (`/dev/xilinx_xvc_driver`)
+//! - **uio-driver**: memory-mapped access via a userspace I/O device (`/dev/uioN`)
+//! - **dev-mem-driver**: memory-mapped access via `/dev/mem` at a given physical address
 pub mod backends;
 
 use std::error::Error;

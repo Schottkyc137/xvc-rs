@@ -18,7 +18,10 @@ use xvc_protocol::{
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Maximum JTAG vector size in bytes that the server will accept (default: 10 MiB).
     pub max_vector_size: u32,
+    /// Timeout applied to each TCP read. Connections that are idle for longer than
+    /// this duration are closed (default: 30 s).
     pub read_write_timeout: Duration,
 }
 
@@ -79,6 +82,7 @@ impl Builder {
 }
 
 impl<T: XvcServer> Server<T> {
+    /// Create a new server wrapping `server` with the given `config`.
     pub fn new(server: T, config: Config) -> Server<T> {
         Server {
             server: Arc::new(Mutex::new(server)),
@@ -101,17 +105,28 @@ impl<T: XvcServer> Server<T> {
 
     /// Serve clients from a pre-bound `listener` until `shutdown` is cancelled.
     ///
-    /// Useful for tests: bind to port 0, discover the assigned port, then pass
-    /// the listener here along with a token that the test controls.
+    /// When `shutdown` is cancelled the accept loop exits cleanly; any connection
+    /// that is already being served runs to completion before the task finishes.
+    ///
+    /// This entry point is useful when the caller needs to control the server
+    /// lifetime programmatically — for example in tests, or to hook into a
+    /// process-wide signal handler:
     ///
     /// ```ignore
     /// let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     /// let addr = listener.local_addr()?;
     /// let token = CancellationToken::new();
-    /// let handle = tokio::spawn(server.listen_on(listener, token.clone()));
-    /// // ... run tests against addr ...
-    /// token.cancel();
-    /// handle.await??;
+    ///
+    /// // Shut down on Ctrl+C
+    /// tokio::spawn({
+    ///     let token = token.clone();
+    ///     async move {
+    ///         tokio::signal::ctrl_c().await.unwrap();
+    ///         token.cancel();
+    ///     }
+    /// });
+    ///
+    /// server.listen_on(listener, token).await?;
     /// ```
     pub async fn listen_on(
         &self,

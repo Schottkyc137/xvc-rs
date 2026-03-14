@@ -10,4 +10,7 @@ categories = ["api-bindings"]
 description = "Library for connecting to Xilinx Virtual Cable (XVC) servers and performing remote JTAG operations"
 
 [dependencies]
-xvc-protocol = { version = "0.1.0", path = "../xvc-protocol" }
+bytes = "1"
+tokio = { version = "1", features = ["net", "io-util"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+xvc-protocol = { version = "0.1.0", path = "../xvc-protocol", features = ["tokio"] }

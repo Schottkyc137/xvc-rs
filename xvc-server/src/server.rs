@@ -1,16 +1,27 @@
-use std::{
-    io::{self, ErrorKind, Write},
-    net::{TcpListener, TcpStream, ToSocketAddrs},
-    time::Duration,
+use std::{io, sync::Arc, time::Duration};
+
+use bytes::BytesMut;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream, ToSocketAddrs, tcp::OwnedReadHalf},
+    sync::Mutex,
+    task::block_in_place,
+    time::timeout,
 };
+use tokio_util::codec::Decoder;
+use tokio_util::sync::CancellationToken;
 
 use crate::XvcServer;
-use xvc_protocol::{Message, Version, XvcInfo};
-use xvc_protocol::{error::ReadError, rw::Decoder};
+use xvc_protocol::{
+    Message, OwnedMessage, Version, XvcInfo, error::ReadError, tokio_codec::MessageDecoder,
+};
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Maximum JTAG vector size in bytes that the server will accept (default: 10 MiB).
     pub max_vector_size: u32,
+    /// Timeout applied to each TCP read. Connections that are idle for longer than
+    /// this duration are closed (default: 30 s).
     pub read_write_timeout: Duration,
 }
 
@@ -25,7 +36,7 @@ impl Default for Config {
 
 #[derive(Debug)]
 pub struct Server<T: XvcServer> {
-    server: T,
+    server: Arc<Mutex<T>>,
     config: Config,
 }
 
@@ -58,98 +69,199 @@ impl Builder {
         self
     }
 
-    /// Set the TCP read and write timeout
+    /// Set the TCP read timeout applied to each message receive.
     pub fn rw_timeout(mut self, timeout: Duration) -> Self {
         self.config.read_write_timeout = timeout;
         self
     }
 
-    /// Build and return the server
+    /// Build and return the server.
     pub fn build<T: XvcServer>(self, server: T) -> Server<T> {
         Server::new(server, self.config)
     }
 }
 
 impl<T: XvcServer> Server<T> {
+    /// Create a new server wrapping `server` with the given `config`.
     pub fn new(server: T, config: Config) -> Server<T> {
-        Server { server, config }
+        Server {
+            server: Arc::new(Mutex::new(server)),
+            config,
+        }
     }
 
-    pub fn listen(&self, addr: impl ToSocketAddrs) -> io::Result<()> {
-        let listener = TcpListener::bind(addr)?;
+    /// Bind to `addr` and serve clients until the process exits.
+    ///
+    /// This is the standard production entry point. To shut the server down
+    /// programmatically (e.g. in tests), use [`listen_on`](Self::listen_on)
+    /// with a [`CancellationToken`].
+    pub async fn listen(&self, addr: impl ToSocketAddrs) -> io::Result<()>
+    where
+        T: Send + 'static,
+    {
+        let listener = TcpListener::bind(addr).await?;
+        self.listen_on(listener, CancellationToken::new()).await
+    }
+
+    /// Serve clients from a pre-bound `listener` until `shutdown` is cancelled.
+    ///
+    /// When `shutdown` is cancelled the accept loop exits cleanly; any connection
+    /// that is already being served runs to completion before the task finishes.
+    ///
+    /// This entry point is useful when the caller needs to control the server
+    /// lifetime programmatically — for example in tests, or to hook into a
+    /// process-wide signal handler:
+    ///
+    /// ```ignore
+    /// let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    /// let addr = listener.local_addr()?;
+    /// let token = CancellationToken::new();
+    ///
+    /// // Shut down on Ctrl+C
+    /// tokio::spawn({
+    ///     let token = token.clone();
+    ///     async move {
+    ///         tokio::signal::ctrl_c().await.unwrap();
+    ///         token.cancel();
+    ///     }
+    /// });
+    ///
+    /// server.listen_on(listener, token).await?;
+    /// ```
+    pub async fn listen_on(
+        &self,
+        listener: TcpListener,
+        shutdown: CancellationToken,
+    ) -> io::Result<()>
+    where
+        T: Send + 'static,
+    {
         log::info!("Server listening for connections");
 
-        for stream in listener.incoming() {
-            match stream {
-                Ok(tcp) => {
-                    let peer_addr = tcp.peer_addr().ok();
-                    if let Some(addr) = peer_addr {
-                        log::info!("New client connection from {}", addr);
-                    }
-                    if let Err(e) = self.handle_client(tcp) {
-                        log::error!("Client error: {}", e);
-                    }
-                }
-                Err(e) => log::error!("Connection error: {}", e),
-            }
-        }
-        Ok(())
-    }
-
-    fn handle_client(&self, mut tcp: TcpStream) -> Result<(), ReadError> {
-        tcp.set_read_timeout(Some(self.config.read_write_timeout))?;
-        tcp.set_write_timeout(Some(self.config.read_write_timeout))?;
-
-        let mut decoder = Decoder::new(self.config.max_vector_size as usize);
-
         loop {
-            match decoder.read_message(&mut tcp) {
-                Ok(message) => self.process_message(message, &mut tcp)?,
-                Err(ReadError::IoError(err)) if err.kind() == ErrorKind::TimedOut => {
-                    log::warn!("Client read timeout, closing connection");
+            tokio::select! {
+                _ = shutdown.cancelled() => {
+                    log::info!("Shutdown signal received, stopping listener");
                     break;
                 }
-                Err(ReadError::IoError(err))
-                    if err.kind() == ErrorKind::ConnectionAborted
-                        || err.kind() == ErrorKind::ConnectionReset =>
-                {
-                    break;
-                } // Client disconnected
-                Err(other) => return Err(other),
+                result = listener.accept() => {
+                    match result {
+                        Ok((stream, addr)) => {
+                            let guard = match Arc::clone(&self.server).try_lock_owned() {
+                                Ok(guard) => guard,
+                                Err(_) => {
+                                    log::warn!("Rejected concurrent client from {}: another client is already active", addr);
+                                    continue;
+                                }
+                            };
+                            log::info!("New client connection from {}", addr);
+                            let config = self.config.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = handle_client(guard, config, stream).await {
+                                    log::error!("Client error: {}", e);
+                                }
+                            });
+                        }
+                        Err(e) => log::error!("Connection error: {}", e),
+                    }
+                }
             }
         }
+
         Ok(())
+    }
+}
+
+async fn handle_client<T>(
+    server: tokio::sync::OwnedMutexGuard<T>,
+    config: Config,
+    stream: TcpStream,
+) -> Result<(), ReadError>
+where
+    T: XvcServer + Send + 'static,
+{
+    let (mut read_half, mut write_half) = stream.into_split();
+    let mut buf = BytesMut::new();
+    let mut decoder = MessageDecoder::new(config.max_vector_size as usize);
+
+    loop {
+        match read_message(
+            &mut read_half,
+            &mut buf,
+            &mut decoder,
+            config.read_write_timeout,
+        )
+        .await
+        {
+            Ok(Some(msg)) => {
+                let response = block_in_place(|| compute_response(&*server, &config, msg))?;
+                write_half.write_all(&response).await?;
+            }
+            Ok(None) => break,
+            Err(e) => return Err(e),
+        }
     }
 
-    /// Process each message, forwarding the implementation to the server.
-    fn process_message(&self, message: Message, tcp: &mut TcpStream) -> Result<(), ReadError> {
-        match message {
-            Message::GetInfo => {
-                log::info!("Received GetInfo message");
-                let info = XvcInfo::new(Version::V1_0, self.config.max_vector_size);
-                info.write_to(tcp)?;
-                log::debug!("Sent XVC info response");
-            }
-            Message::SetTck { period_ns } => {
-                log::debug!("Received SetTck message: period_ns={}", period_ns);
-                let ret_period = self.server.set_tck(period_ns);
-                log::debug!("Set TCK returned: period_ns={}", ret_period);
-                tcp.write_all(&ret_period.to_le_bytes())?;
-            }
-            Message::Shift { num_bits, tms, tdi } => {
-                log::debug!(
-                    "Received Shift message: num_bits={}, tms_len={}, tdi_len={}",
-                    num_bits,
-                    tms.len(),
-                    tdi.len()
-                );
-                log::trace!("Shift TMS data: {:02x?}", &tms[..]);
-                log::trace!("Shift TDI data: {:02x?}", &tdi[..]);
-                let tdo = self.server.shift(num_bits, &tms, &tdi);
-                log::trace!("Shift result TDO data: {:02x?}", &tdo[..]);
-                tcp.write_all(&tdo)?;
+    Ok(())
+}
+
+/// Read one complete message from `read`, respecting `rw_timeout` per read call.
+/// Returns `Ok(None)` on clean EOF or timeout.
+async fn read_message(
+    read: &mut OwnedReadHalf,
+    buf: &mut BytesMut,
+    decoder: &mut MessageDecoder,
+    rw_timeout: Duration,
+) -> Result<Option<OwnedMessage>, ReadError> {
+    loop {
+        if let Some(msg) = decoder.decode(buf)? {
+            return Ok(Some(msg));
+        }
+
+        match timeout(rw_timeout, read.read_buf(buf)).await {
+            Ok(Ok(0)) => return Ok(None), // clean EOF
+            Ok(Ok(_)) => {}               // more bytes, loop and try to decode
+            Ok(Err(e)) => return Err(ReadError::from(e)),
+            Err(_elapsed) => {
+                log::warn!("Client read timeout, closing connection");
+                return Ok(None);
             }
         }
-        Ok(())
     }
+}
+
+fn compute_response<T: XvcServer>(
+    server: &T,
+    config: &Config,
+    msg: OwnedMessage,
+) -> Result<Vec<u8>, ReadError> {
+    let mut buf = Vec::new();
+    match msg {
+        Message::GetInfo => {
+            log::info!("Received GetInfo message");
+            let info = XvcInfo::new(Version::V1_0, config.max_vector_size);
+            info.write_to(&mut buf)?;
+            log::debug!("Sent XVC info response");
+        }
+        Message::SetTck { period_ns } => {
+            log::debug!("Received SetTck message: period_ns={}", period_ns);
+            let ret_period = server.set_tck(period_ns);
+            log::debug!("Set TCK returned: period_ns={}", ret_period);
+            buf.extend_from_slice(&ret_period.to_le_bytes());
+        }
+        Message::Shift { num_bits, tms, tdi } => {
+            log::debug!(
+                "Received Shift message: num_bits={}, tms_len={}, tdi_len={}",
+                num_bits,
+                tms.len(),
+                tdi.len()
+            );
+            log::trace!("Shift TMS data: {:02x?}", &tms[..]);
+            log::trace!("Shift TDI data: {:02x?}", &tdi[..]);
+            let tdo = server.shift(num_bits, &tms, &tdi);
+            log::trace!("Shift result TDO data: {:02x?}", &tdo[..]);
+            buf.extend_from_slice(&tdo);
+        }
+    }
+    Ok(buf)
 }

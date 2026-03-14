@@ -89,7 +89,7 @@ fn incorrect_version_from_str() {
 /// The server needs to process each message in the order received and promptly provide a response.
 /// For the XVC 1.0 protocol, only one connection is assumed.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Message {
+pub enum Message<B = Box<[u8]>> {
     /// Requests info from the server. This is used to determine protocol capabilities of the server.
     GetInfo,
     /// Configures the TCK period. When sending JTAG vectors the TCK rate may need to be varied to accommodate cable and board signal integrity conditions.
@@ -101,12 +101,15 @@ pub enum Message {
         num_bits: u32,
         /// a byte sized vector with all the TMS data.
         /// The vector is num_bits and rounds up to the nearest byte.
-        tms: Box<[u8]>,
+        tms: B,
         /// a byte sized vector with all the TDI data.
         /// The vector is num_bits and rounds up to the nearest byte.
-        tdi: Box<[u8]>,
+        tdi: B,
     },
 }
+
+pub type OwnedMessage = Message<Box<[u8]>>;
+pub type BorrowedMessage<'a> = Message<&'a [u8]>;
 
 /// Contains static information about the server capabilities that are transferred between
 /// client and server in the beginning.

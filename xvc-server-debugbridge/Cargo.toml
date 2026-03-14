@@ -14,6 +14,8 @@ description = "Backend implementations of the XVC (Xilinx Virtual Cable) server 
 log = "0.4.28"
 clap = { version = "4.5.52", features = ["derive"] }
 env_logger = "0.11.5"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tokio-util = "0.7"
 nix = { version = "0.30.1", features = [
     "uio",
     "mman",

@@ -2,7 +2,7 @@
 use std::io::{self, Read, Write};
 
 use crate::{
-    Message, XvcCommand, XvcInfo,
+    BorrowedMessage, Message, OwnedMessage, XvcCommand, XvcInfo,
     codec::{ParseErr, SetTck, Shift},
     error::ReadError,
 };
@@ -120,7 +120,7 @@ impl Decoder {
     /// let msg = dec.read_message(&mut cursor).unwrap();
     /// assert!(matches!(msg, xvc_protocol::Message::GetInfo));
     /// ```
-    pub fn read_message(&mut self, reader: &mut impl Read) -> Result<Message, ReadError> {
+    pub fn read_message(&mut self, reader: &mut impl Read) -> Result<OwnedMessage, ReadError> {
         self.buf.clear();
         let cmd = loop {
             let mut slice: &[u8] = &self.buf;
@@ -200,7 +200,7 @@ impl XvcInfo {
     }
 }
 
-impl Message {
+impl Message<Box<[u8]>> {
     /// Read a `Message` from `reader` using an internal `Decoder`.
     ///
     /// This is a convenience wrapper that constructs a `Decoder` configured
@@ -211,16 +211,33 @@ impl Message {
     /// ```rust
     /// use std::io::Cursor;
     /// let mut c = Cursor::new(b"getinfo:");
-    /// let msg = xvc_protocol::Message::from_reader(&mut c, 1024).unwrap();
+    /// let msg = xvc_protocol::OwnedMessage::from_reader(&mut c, 1024).unwrap();
     /// assert!(matches!(msg, xvc_protocol::Message::GetInfo));
     /// ```
     pub fn from_reader(
         reader: &mut impl Read,
         max_shift_bytes: usize,
-    ) -> Result<Message, ReadError> {
+    ) -> Result<OwnedMessage, ReadError> {
         Decoder::new(max_shift_bytes).read_message(reader)
     }
 
+    /// Borrows this message into a [BorrowedMessage]
+    pub fn borrow<'a>(&'a self) -> BorrowedMessage<'a> {
+        match self {
+            Message::GetInfo => BorrowedMessage::GetInfo,
+            Message::SetTck { period_ns } => Message::SetTck {
+                period_ns: *period_ns,
+            },
+            Message::Shift { num_bits, tms, tdi } => BorrowedMessage::Shift {
+                num_bits: *num_bits,
+                tms,
+                tdi,
+            },
+        }
+    }
+}
+
+impl<B: AsRef<[u8]>> Message<B> {
     /// Serialize this `Message` to `writer` in the protocol command format.
     ///
     /// - `GetInfo` is written as `getinfo:`
@@ -239,15 +256,11 @@ impl Message {
                 writer.write_all(CMD_SET_TCK)?;
                 writer.write_all(&period_in_ns.to_le_bytes())
             }
-            Message::Shift {
-                num_bits,
-                tms: tms_vector,
-                tdi: tdi_vector,
-            } => {
+            Message::Shift { num_bits, tms, tdi } => {
                 writer.write_all(CMD_SHIFT)?;
                 writer.write_all(&num_bits.to_le_bytes())?;
-                writer.write_all(tms_vector)?;
-                writer.write_all(tdi_vector)
+                writer.write_all(tms.as_ref())?;
+                writer.write_all(tdi.as_ref())
             }
         }
     }
@@ -256,6 +269,8 @@ impl Message {
 #[cfg(test)]
 mod test {
     use std::{io, io::Cursor, vec};
+
+    use crate::{BorrowedMessage, OwnedMessage};
 
     use super::*;
 
@@ -281,7 +296,7 @@ mod test {
     fn read_getinfo() {
         let data = b"getinfo:".to_vec();
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
             Message::GetInfo => {}
             _ => panic!("expected GetInfo"),
         }
@@ -290,7 +305,7 @@ mod test {
     #[test]
     fn write_getinfo() {
         let mut out = Vec::new();
-        Message::GetInfo.write_to(&mut out).unwrap();
+        BorrowedMessage::GetInfo.write_to(&mut out).unwrap();
         assert_eq!(out, b"getinfo:".to_vec());
     }
 
@@ -300,7 +315,7 @@ mod test {
         let mut data = b"settck:".to_vec();
         data.extend_from_slice(&period.to_le_bytes());
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
             Message::SetTck {
                 period_ns: period_in_ns,
             } => assert_eq!(period_in_ns, period),
@@ -312,7 +327,7 @@ mod test {
     fn write_settck() {
         let period: u32 = 0x1234_5678;
         let mut out = Vec::new();
-        Message::SetTck { period_ns: period }
+        BorrowedMessage::SetTck { period_ns: period }
             .write_to(&mut out)
             .unwrap();
         let mut expected = b"settck:".to_vec();
@@ -333,7 +348,7 @@ mod test {
         data.extend_from_slice(&tdi);
 
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
             Message::Shift {
                 num_bits: nb,
                 tms: tms_vector,
@@ -351,13 +366,13 @@ mod test {
     fn write_shift() {
         let num_bits: u32 = 13; // 2 bytes
         let num_bytes = num_bits.div_ceil(8) as usize;
-        let tms = vec![0xAAu8; num_bytes].into_boxed_slice();
-        let tdi = vec![0x55u8; num_bytes].into_boxed_slice();
+        let tms = vec![0xAAu8; num_bytes];
+        let tdi = vec![0x55u8; num_bytes];
 
-        let cmd = Message::Shift {
+        let cmd = BorrowedMessage::Shift {
             num_bits,
-            tms: tms.clone(),
-            tdi: tdi.clone(),
+            tms: &tms,
+            tdi: &tdi,
         };
         let mut out = Vec::new();
         cmd.write_to(&mut out).unwrap();
@@ -374,7 +389,7 @@ mod test {
     fn invalid_prefix() {
         let data = b"xx".to_vec();
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
             Err(ReadError::InvalidCommand(p)) => assert_eq!(p, "xx"),
             other => panic!("expected InvalidCommand, got {:?}", other),
         }
@@ -387,7 +402,7 @@ mod test {
         let mut data = b"shift:".to_vec();
         data.extend_from_slice(&num_bits.to_le_bytes());
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, 1024) {
+        match OwnedMessage::from_reader(&mut cursor, 1024) {
             Err(ReadError::TooManyBytes { max, need: got }) => {
                 assert_eq!(max, 1024);
                 assert_eq!(got, num_bytes_exceed);
@@ -445,7 +460,7 @@ mod test {
     fn read_getinfo_with_extra_data() {
         let data = b"getinfo:getinfo:";
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
             Message::GetInfo => {}
             _ => panic!("expected GetInfo"),
         }
@@ -455,7 +470,7 @@ mod test {
     fn read_getinfo_exact() {
         let data = b"getinfo:";
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
             Message::GetInfo => {}
             _ => panic!("expected GetInfo"),
         }
@@ -467,7 +482,7 @@ mod test {
         let mut data = b"settck:".to_vec();
         data.extend_from_slice(&period.to_le_bytes());
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
             Message::SetTck {
                 period_ns: period_in_ns,
             } => assert_eq!(period_in_ns, 0),
@@ -481,7 +496,7 @@ mod test {
         let mut data = b"settck:".to_vec();
         data.extend_from_slice(&period.to_le_bytes());
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
             Message::SetTck {
                 period_ns: period_in_ns,
             } => assert_eq!(period_in_ns, u32::MAX),
@@ -494,7 +509,7 @@ mod test {
         // Command parsed successfully but stream ends before the 4-byte payload
         let data = b"settck:".to_vec();
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
             Err(ReadError::IoError(_)) => {}
             other => panic!("expected IoError (unexpected EOF), got {:?}", other),
         }
@@ -505,7 +520,7 @@ mod test {
         let mut data = b"settck:".to_vec();
         data.extend_from_slice(&[0xAA, 0xBB]);
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
             Err(ReadError::IoError(e)) if e.kind() == io::ErrorKind::UnexpectedEof => {}
             other => panic!("expected UnexpectedEof, got {:?}", other),
         }
@@ -518,7 +533,7 @@ mod test {
         data.extend_from_slice(&num_bits.to_le_bytes());
 
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
             Message::Shift {
                 num_bits: nb,
                 tms: tms_vector,
@@ -544,7 +559,7 @@ mod test {
         data.extend_from_slice(&tdi);
 
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
             Message::Shift {
                 num_bits: nb,
                 tms: tms_vector,
@@ -565,7 +580,7 @@ mod test {
         data.extend_from_slice(&num_bits.to_le_bytes());
 
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, 1024) {
+        match OwnedMessage::from_reader(&mut cursor, 1024) {
             Err(ReadError::TooManyBytes { .. }) => {}
             other => panic!("expected TooManyBytes, got {:?}", other),
         }
@@ -577,7 +592,7 @@ mod test {
         data.extend_from_slice(&[0xAA, 0xBB]);
 
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
             Err(ReadError::IoError(e)) if e.kind() == io::ErrorKind::UnexpectedEof => {}
             other => panic!("expected UnexpectedEof, got {:?}", other),
         }
@@ -591,7 +606,7 @@ mod test {
         data.extend_from_slice(&[0xAA]);
 
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
             Err(ReadError::IoError(e)) if e.kind() == io::ErrorKind::UnexpectedEof => {}
             other => panic!("expected UnexpectedEof, got {:?}", other),
         }
@@ -605,7 +620,7 @@ mod test {
         data.extend_from_slice(&[0xAA]); // TMS only
 
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
             Err(ReadError::IoError(e)) if e.kind() == io::ErrorKind::UnexpectedEof => {}
             other => panic!("expected UnexpectedEof, got {:?}", other),
         }
@@ -624,7 +639,7 @@ mod test {
         data.extend_from_slice(&tdi);
 
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
             Message::Shift {
                 num_bits: nb,
                 tms: tms_vector,
@@ -652,7 +667,7 @@ mod test {
 
         let mut cursor = Cursor::new(data);
         assert!(
-            Message::from_reader(&mut cursor, max_shift).is_ok(),
+            OwnedMessage::from_reader(&mut cursor, max_shift).is_ok(),
             "vectors exactly at max_shift should be accepted"
         );
     }
@@ -670,7 +685,7 @@ mod test {
         data.extend_from_slice(&[0x55; 5]);
 
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, max_shift) {
+        match OwnedMessage::from_reader(&mut cursor, max_shift) {
             Err(ReadError::TooManyBytes { .. }) => {}
             other => panic!("expected TooManyBytes, got {:?}", other),
         }
@@ -678,10 +693,10 @@ mod test {
 
     #[test]
     fn write_shift_zero_bits() {
-        let cmd = Message::Shift {
+        let cmd = BorrowedMessage::Shift {
             num_bits: 0,
-            tms: Box::new([]),
-            tdi: Box::new([]),
+            tms: &[],
+            tdi: &[],
         };
         let mut out = Vec::new();
         cmd.write_to(&mut out).unwrap();
@@ -693,10 +708,10 @@ mod test {
 
     #[test]
     fn write_shift_max_bits() {
-        let cmd = Message::Shift {
+        let cmd = BorrowedMessage::Shift {
             num_bits: u32::MAX,
-            tms: Box::new([0xFF; 512]),
-            tdi: Box::new([0xAA; 512]),
+            tms: &[0xFFu8; 512],
+            tdi: &[0xAAu8; 512],
         };
         let mut out = Vec::new();
         cmd.write_to(&mut out).unwrap();
@@ -712,7 +727,7 @@ mod test {
     fn invalid_command_name() {
         let data = b"invalid:".to_vec();
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
             Err(ReadError::InvalidCommand(_)) => {}
             other => panic!("expected InvalidCommand, got {:?}", other),
         }
@@ -722,7 +737,7 @@ mod test {
     fn empty_input() {
         let data = b"".to_vec();
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
             Err(ReadError::IoError(_)) => {}
             other => panic!("expected IoError, got {:?}", other),
         }
@@ -732,7 +747,7 @@ mod test {
     fn only_delimiter() {
         let data = b":".to_vec();
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
             Err(ReadError::InvalidCommand(_)) => {}
             other => panic!("expected InvalidCommand, got {:?}", other),
         }
@@ -742,7 +757,7 @@ mod test {
     fn binary_garbage_input() {
         let data = vec![0xFF, 0xFE, 0xFD, 0xFC];
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES) {
             Err(ReadError::InvalidCommand(_)) => {}
             other => panic!("expected InvalidCommand, got {:?}", other),
         }
@@ -763,14 +778,14 @@ mod test {
 
     #[test]
     fn roundtrip_getinfo() {
-        let original = Message::GetInfo;
+        let original = BorrowedMessage::GetInfo;
         let mut buffer = Vec::new();
         original.write_to(&mut buffer).unwrap();
 
         let mut cursor = Cursor::new(buffer);
-        let parsed = Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap();
+        let parsed = OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap();
 
-        assert_eq!(parsed, original);
+        assert_eq!(parsed.borrow(), original);
     }
 
     #[test]
@@ -782,16 +797,16 @@ mod test {
         original.write_to(&mut buffer).unwrap();
 
         let mut cursor = Cursor::new(buffer);
-        let parsed = Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap();
+        let parsed = OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap();
 
-        assert_eq!(parsed, original);
+        assert_eq!(parsed.borrow(), original);
     }
 
     #[test]
     fn roundtrip_shift() {
         let num_bits = 128;
         let num_bytes = (num_bits / 8) as usize;
-        let original = Message::Shift {
+        let original = OwnedMessage::Shift {
             num_bits,
             tms: vec![0xAA; num_bytes].into_boxed_slice(),
             tdi: vec![0x55; num_bytes].into_boxed_slice(),
@@ -800,7 +815,7 @@ mod test {
         original.write_to(&mut buffer).unwrap();
 
         let mut cursor = Cursor::new(buffer);
-        let parsed = Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap();
+        let parsed = OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap();
 
         assert_eq!(parsed, original);
     }
@@ -818,7 +833,7 @@ mod test {
         data.extend_from_slice(&tdi);
 
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
             Message::Shift {
                 num_bits: nb,
                 tms: tms_vector,
@@ -844,7 +859,7 @@ mod test {
         data.extend_from_slice(&tdi);
 
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
             Message::Shift {
                 num_bits: nb,
                 tms: tms_vector,
@@ -870,7 +885,7 @@ mod test {
         data.extend_from_slice(&tdi);
 
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
             Message::Shift {
                 num_bits: nb,
                 tms: tms_vector,
@@ -896,7 +911,7 @@ mod test {
         data.extend_from_slice(&tdi);
 
         let mut cursor = Cursor::new(data);
-        match Message::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
+        match OwnedMessage::from_reader(&mut cursor, DEFAULT_MAX_SHIFT_BYTES).unwrap() {
             Message::Shift {
                 num_bits: nb,
                 tms: tms_vector,

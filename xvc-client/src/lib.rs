@@ -69,7 +69,9 @@ use tokio::{
 };
 use tokio_util::codec::Decoder;
 
-use xvc_protocol::{Message, XvcInfo, error::ReadError, tokio_codec::XvcInfoDecoder};
+use xvc_protocol::{
+    BorrowedMessage, Message, XvcInfo, error::ReadError, tokio_codec::XvcInfoDecoder,
+};
 
 /// XVC client for remote JTAG operations.
 ///
@@ -133,10 +135,10 @@ impl XvcClient {
     pub async fn shift(
         &mut self,
         num_bits: u32,
-        tms: Box<[u8]>,
-        tdi: Box<[u8]>,
+        tms: &[u8],
+        tdi: &[u8],
     ) -> Result<Box<[u8]>, ReadError> {
-        self.write_message(Message::Shift { num_bits, tms, tdi })
+        self.write_message(BorrowedMessage::Shift { num_bits, tms, tdi })
             .await?;
         let num_bytes = num_bits.div_ceil(8) as usize;
         let mut buf = vec![0u8; num_bytes];
@@ -144,7 +146,7 @@ impl XvcClient {
         Ok(buf.into_boxed_slice())
     }
 
-    async fn write_message(&mut self, msg: Message) -> Result<(), ReadError> {
+    async fn write_message(&mut self, msg: BorrowedMessage<'_>) -> Result<(), ReadError> {
         let mut buf = Vec::new();
         msg.write_to(&mut buf)?;
         self.tcp.write_all(&buf).await?;

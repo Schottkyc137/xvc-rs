@@ -6,11 +6,10 @@ on:
       - main
 
 jobs:
-  get-tag:
+  release:
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.tag.outputs.tag }}
-      new: ${{ steps.tag_exists.outputs.new }}
+    permissions:
+      contents: write      # needed to push tags and create releases
 
     steps:
       - name: Checkout
@@ -21,46 +20,30 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Extract version from Cargo.toml
-        id: cargo
+      - name: Publish to crates.io
+        uses: katyo/publish-crates@v2
+        id: publish
+        with:
+          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          check-repo: false
+
+      - name: Create Git tags for published crates
+        id: tags
+        if: fromJSON(steps.publish.outputs.published).*
         run: |
-          VERSION=$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[] | select(.name == "xvc-server-debugbridge") | .version')
-          echo "VERSION=$VERSION"
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo '${{ steps.publish.outputs.published }}' \
+            | jq -r '.[] | "\(.name)/v\(.version)"' \
+            | while read TAG; do
+                git tag "$TAG"
+                git push origin "$TAG"
+              done
 
-      - name: Determine tag name
-        id: tag
-        run: |
-          TAG="xvc-server-debugbridge/v${{ steps.cargo.outputs.version }}"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-
-      - name: Check if tag already exists
-        id: tag_exists
-        run: |
-          if git rev-parse "${{ steps.tag.outputs.tag }}" >/dev/null 2>&1; then
-            echo "new=false" >> $GITHUB_OUTPUT
-          else
-            echo "new=true" >> $GITHUB_OUTPUT
-          fi
-
-  release:
-    runs-on: ubuntu-latest
-    needs: get-tag
-    if: needs.get-tag.outputs.new == 'true'
-    permissions:
-      contents: write      # needed to push tags and create releases
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Create Git tag
-        run: |
-          git tag ${{ needs.get-tag.outputs.tag }}
-          git push origin ${{ needs.get-tag.outputs.tag }}
+          DEBUGBRIDGE_NEW=$(echo '${{ steps.publish.outputs.published }}' \
+            | jq 'any(.[]; .name == "xvc-server-debugbridge")')
+          echo "debugbridge_new=$DEBUGBRIDGE_NEW" >> $GITHUB_OUTPUT
 
       - name: Build binary
+        if: steps.tags.outputs.debugbridge_new == 'true'
         uses: houseabsolute/actions-rust-cross@v1
         with:
           command: build
@@ -69,21 +52,10 @@ jobs:
           toolchain: stable
 
       - name: Publish artifacts and release
+        if: steps.tags.outputs.debugbridge_new == 'true'
         uses: houseabsolute/actions-rust-release@v0
         with:
           executable-name: xvc-bridge
           target: aarch64-unknown-linux-gnu
+          release-tag-prefix: "xvc-server-debugbridge/v"
           changes-file: "" # No changelog file
-
-      - name: Publish to crates.io
-        uses: katyo/publish-crates@v2
-        id: publish
-        with:
-          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          check-repo: false
-          ignore-unpublished-changes: true
-
-      - name: List published crates
-        if: fromJSON(steps.publish.outputs.published).*
-        run: |
-          echo "Published: ${{ join(fromJSON(steps.publish.outputs.published).*.name, ', ') }}"

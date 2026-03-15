@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use xvc_client::XvcClient;
 use xvc_server::server::Config;
 use xvc_tests::spawn_server;
@@ -29,7 +31,15 @@ async fn new_client_can_connect_after_previous_disconnects() {
         // client_a dropped here, TCP connection closed
     }
 
-    // Server should accept the next client now that the lock is free.
-    let mut client_b = XvcClient::connect(addr).await.unwrap();
-    client_b.get_info().await.unwrap();
+    // Retry until the server releases the lock from the previous connection.
+    // The handle_client task processes the EOF asynchronously, so there is a
+    // brief window where try_lock_owned() might still fail.
+    for attempt in 1..=10 {
+        let mut client_b = XvcClient::connect(addr).await.unwrap();
+        if client_b.get_info().await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10 * attempt)).await;
+    }
+    panic!("server did not release lock after previous client disconnected");
 }

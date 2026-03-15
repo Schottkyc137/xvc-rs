@@ -1,8 +1,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use xvc_protocol::Message;
+use xvc_protocol::BorrowedMessage;
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let message = Message::GetInfo;
+    let message = BorrowedMessage::GetInfo;
 
     c.bench_with_input(
         BenchmarkId::new("message", "getinfo"),
@@ -16,7 +16,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         },
     );
 
-    let message = Message::SetTck { period_ns: 100 };
+    let message = BorrowedMessage::SetTck { period_ns: 100 };
 
     c.bench_with_input(BenchmarkId::new("message", "settck"), &message, |b, msg| {
         b.iter(|| {
@@ -30,10 +30,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     let tms = vec![0x55; 128];
     let num_bits = (tdi.len() * 8) as u32;
 
-    let message = Message::Shift {
+    let message = BorrowedMessage::Shift {
         num_bits,
-        tms: tms.into_boxed_slice(),
-        tdi: tdi.into_boxed_slice(),
+        tms: &tms,
+        tdi: &tdi,
     };
 
     c.bench_with_input(BenchmarkId::new("message", "shift"), &message, |b, msg| {

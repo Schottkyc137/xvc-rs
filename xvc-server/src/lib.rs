@@ -42,7 +42,7 @@
 //!
 //! Create a struct that implements the [`XvcServer`] trait:
 //!
-//! ```ignore
+//! ```no_run
 //! use xvc_server::XvcServer;
 //!
 //! struct MyDriver {
@@ -55,7 +55,7 @@
 //!         period_ns
 //!     }
 //!
-//!     fn shift(&self, num_bits: u32, tms: Box<[u8]>, tdi: Box<[u8]>) -> Box<[u8]> {
+//!     fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8]) -> Box<[u8]> {
 //!         // Perform JTAG shifting and return TDO data
 //!         Box::default()
 //!     }
@@ -73,7 +73,7 @@
 //! let server = Server::new(driver, config);
 //!
 //! let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 2542);
-//! server.listen(addr)?;
+//! server.listen(addr).await?;
 //! ```
 //!
 //! ## Error Handling
@@ -104,9 +104,13 @@
 //!
 //! ## Thread Model
 //!
-//! The server processes each client connection sequentially in a single thread.
-//! For multi-client support, wrap the server in a multi-threaded framework or
-//! run multiple server instances.
+//! The server is async (tokio) and accepts connections concurrently, but enforces
+//! **at-most-one active client** at a time. A second connection attempt while a client
+//! is active is immediately rejected. This matches the XVC protocol assumption of a
+//! single JTAG session and prevents interleaved access to the hardware state machine.
+//!
+//! Backend methods (`set_tck`, `shift`) are called via `block_in_place`, so the server
+//! requires a multi-thread tokio runtime.
 pub mod server;
 
 /// Trait that backend drivers must implement to provide JTAG functionality.

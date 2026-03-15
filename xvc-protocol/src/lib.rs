@@ -40,11 +40,11 @@
 //! ### Writing Messages to a Server
 //!
 //! ```
-//! use xvc_protocol::Message;
+//! use xvc_protocol::BorrowedMessage;
 //! use std::vec::Vec;
 //!
 //! // Request server info
-//! let msg = Message::GetInfo;
+//! let msg = BorrowedMessage::GetInfo;
 //! let mut buffer = Vec::new();
 //! msg.write_to(&mut buffer).expect("Writing to vector shouldn't fail");
 //! // Send buffer to server...
@@ -54,13 +54,13 @@
 //! ### Shifting JTAG Vectors
 //!
 //! ```
-//! use xvc_protocol::Message;
+//! use xvc_protocol::BorrowedMessage;
 //!
 //! let num_bytes = 2;
-//! let tms = vec![0xAA; num_bytes].into_boxed_slice();
-//! let tdi = vec![0x55; num_bytes].into_boxed_slice();
+//! let tms = vec![0xAA; num_bytes];
+//! let tdi = vec![0x55; num_bytes];
 //!
-//! let shift_msg = Message::Shift { num_bits: 2 * num_bytes as u32, tms, tdi };
+//! let shift_msg = BorrowedMessage::Shift { num_bits: 2 * num_bytes as u32, tms: &tms, tdi: &tdi };
 //! let mut output = Vec::new();
 //! shift_msg.write_to(&mut output).expect("Writing to vector shouldn't fail");
 //! assert_eq!(output, b"shift:\x04\x00\x00\x00\xAA\xAA\x55\x55");
@@ -89,3 +89,5 @@ pub use protocol::*;
 pub(crate) mod codec;
 pub mod error;
 pub mod rw;
+#[cfg(feature = "tokio")]
+pub mod tokio_codec;

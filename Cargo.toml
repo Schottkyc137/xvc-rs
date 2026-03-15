@@ -1,5 +1,18 @@
 [workspace]
-members = ["xvc-client", "xvc-protocol", "xvc-server", "xvc-server-debugbridge"]
+members = [
+    "xvc-client",
+    "xvc-protocol",
+    "xvc-server",
+    "xvc-server-debugbridge",
+    "xvc-tests",
+]
+default-members = [
+    "xvc-client",
+    "xvc-protocol",
+    "xvc-server",
+    "xvc-server-debugbridge",
+    "xvc-tests",
+]
 resolver = "3"
 
 [workspace.package]

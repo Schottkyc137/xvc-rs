@@ -12,6 +12,6 @@ description = "Library for implementing Xilinx Virtual Cable (XVC) servers that 
 [dependencies]
 bytes = "1"
 log = "0.4.28"
-tokio = { version = "1", features = ["net", "rt", "io-util", "time", "sync", "macros"] }
+tokio = { version = "1", features = ["net", "rt", "io-util", "time", "sync", "macros", "rt-multi-thread"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 xvc-protocol = { version = "0.2.0", path = "../xvc-protocol", features = ["tokio"] }

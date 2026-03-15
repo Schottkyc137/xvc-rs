@@ -1,6 +1,6 @@
 [package]
 name = "xvc-server"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -14,4 +14,4 @@ bytes = "1"
 log = "0.4.28"
 tokio = { version = "1", features = ["net", "rt", "io-util", "time", "sync", "macros"] }
 tokio-util = { version = "0.7", features = ["codec"] }
-xvc-protocol = { version = "0.1.0", path = "../xvc-protocol", features = ["tokio"] }
+xvc-protocol = { version = "0.2.0", path = "../xvc-protocol", features = ["tokio"] }

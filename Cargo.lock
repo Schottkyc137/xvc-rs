@@ -822,7 +822,7 @@ dependencies = [
 
 [[package]]
 name = "xvc-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "tokio",
@@ -832,7 +832,7 @@ dependencies = [
 
 [[package]]
 name = "xvc-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "criterion",
@@ -841,7 +841,7 @@ dependencies = [
 
 [[package]]
 name = "xvc-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "log",

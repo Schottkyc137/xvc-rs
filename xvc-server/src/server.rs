@@ -154,6 +154,7 @@ impl<T: XvcServer> Server<T> {
                                     continue;
                                 }
                             };
+                            stream.set_nodelay(true)?;
                             log::info!("New client connection from {}", addr);
                             let config = self.config.clone();
                             tokio::spawn(async move {

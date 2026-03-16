@@ -26,6 +26,7 @@ jobs:
         with:
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           check-repo: false
+          ignore-unpublished-changes: true
 
       - name: Create Git tags for published crates
         id: tags

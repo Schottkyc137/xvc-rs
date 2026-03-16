@@ -68,7 +68,7 @@ struct Args {
     #[arg(short, long, default_value = "2542")]
     port: u16,
 
-    #[arg(short, long, default_value = "127.0.0.1")]
+    #[arg(short, long, default_value = "0.0.0.0")]
     ip: IpAddr,
 
     #[clap(subcommand)]

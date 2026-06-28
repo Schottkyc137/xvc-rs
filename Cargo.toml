@@ -12,6 +12,7 @@ default-members = [
     "xvc-protocol",
     "xvc-server",
     "xvc-server-debugbridge",
+    "xvc-server-ftdi",
     "xvc-tests",
 ]
 resolver = "3"

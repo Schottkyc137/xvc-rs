@@ -1,7 +1,16 @@
-use std::{mem::take, time::Duration};
+use std::{fmt::Display, mem::take, time::Duration};
 
 use ftdi_mpsse::{ClockBits, ClockData, ClockTMS, MpsseCmdBuilder, mpsse};
-use rusb::{Context, DeviceHandle, UsbContext};
+use rusb::{Context, DeviceHandle, UsbContext, constants::LIBUSB_CLASS_PER_INTERFACE};
+
+const FTDI_VID: u16 = 0x0403;
+
+// see https://ftdichip.com/Documents/TechnicalNotes/TN_100_USB_VID-PID_Guidelines.pdf
+const KNOWN_PRODUCT_IDS: &[u16] = &[
+    0x6010, // FT2232H
+    0x6011, // FT4232H
+    0x6014, // FT232H
+];
 
 const FTDI_PIN_TCK: u8 = 0x1;
 const FTDI_PIN_TDI: u8 = 0x2;
@@ -38,13 +47,166 @@ mpsse! {
     };
 }
 
+pub struct DeviceInfo {
+    pub manufacturer: Option<String>,
+    pub product: Option<String>,
+    pub serial: Option<String>,
+}
+
+impl Display for DeviceInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.product.as_deref().unwrap_or("FTDI device"))?;
+
+        let mut details = Vec::new();
+        if let Some(manufacturer) = &self.manufacturer {
+            details.push(format!("by {manufacturer}"));
+        }
+        if let Some(serial) = &self.serial {
+            details.push(format!("serial {serial}"));
+        }
+
+        if !details.is_empty() {
+            write!(f, " ({})", details.join(", "))?;
+        }
+
+        Ok(())
+    }
+}
+
+pub fn list_available_devices(
+    ftdi_port: usize,
+    timeout: Duration,
+) -> rusb::Result<Vec<FtdiJtagDevice>> {
+    let ctx = rusb::Context::new()?;
+
+    let mut available_devices = Vec::new();
+
+    for device in ctx.devices()?.iter() {
+        let descriptor = device.device_descriptor()?;
+
+        if descriptor.class_code() != LIBUSB_CLASS_PER_INTERFACE {
+            log::trace!(
+                "Rejecting {:?}: wrong class {}",
+                device,
+                descriptor.class_code()
+            );
+            continue;
+        }
+
+        if descriptor.vendor_id() != FTDI_VID {
+            log::trace!(
+                "Rejecting {:?}: vendor id (0x{:x}) not FTDI id",
+                device,
+                descriptor.vendor_id()
+            );
+            continue;
+        }
+
+        if !KNOWN_PRODUCT_IDS.contains(&descriptor.product_id()) {
+            log::trace!(
+                "Rejecting {:?}: product id (0x{:x}) not known FTDI id",
+                device,
+                descriptor.product_id()
+            );
+            continue;
+        }
+
+        let dev_config = device
+            .active_config_descriptor()
+            .or(device.config_descriptor(0))?;
+
+        let Some(iface) = dev_config.interfaces().nth(ftdi_port) else {
+            log::trace!(
+                "Rejecting {:?}: too few interfaces: requested at index {}, available {}",
+                device,
+                ftdi_port,
+                dev_config.num_interfaces()
+            );
+            continue;
+        };
+
+        // FTDI has only one descriptor
+        let iface_desc = iface.descriptors().next().unwrap();
+        let mut output_ep = None;
+        let mut input_ep = None;
+        for ep in iface_desc.endpoint_descriptors() {
+            match (ep.transfer_type(), ep.direction()) {
+                (rusb::TransferType::Bulk, rusb::Direction::In) => {
+                    if input_ep.is_none() {
+                        input_ep = Some(ep)
+                    } else {
+                        panic!("Multiple input endpoints");
+                    }
+                }
+                (rusb::TransferType::Bulk, rusb::Direction::Out) => {
+                    if output_ep.is_none() {
+                        output_ep = Some(ep);
+                    } else {
+                        panic!("Multiple output endpoints");
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let handle = device.open()?;
+
+        let manufacturer = if let Some(idx) = descriptor.manufacturer_string_index() {
+            Some(handle.read_string_descriptor_ascii(idx)?)
+        } else {
+            None
+        };
+        let product = if let Some(idx) = descriptor.product_string_index() {
+            Some(handle.read_string_descriptor_ascii(idx)?)
+        } else {
+            None
+        };
+        let serial_number = if let Some(idx) = descriptor.serial_number_string_index() {
+            Some(handle.read_string_descriptor_ascii(idx)?)
+        } else {
+            None
+        };
+
+        let info = DeviceInfo {
+            manufacturer,
+            product,
+            serial: serial_number,
+        };
+
+        let output_ep = output_ep.expect("Expected exactly one output endpoint");
+        let input_ep = input_ep.expect("Expected exactly one input endpoint");
+
+        available_devices.push(FtdiJtagDevice::new(
+            handle,
+            info,
+            iface.number(),
+            BulkEndpoint {
+                address: output_ep.address(),
+                request_size: output_ep.max_packet_size(),
+            },
+            BulkEndpoint {
+                address: input_ep.address(),
+                request_size: input_ep.max_packet_size(),
+            },
+            timeout,
+        ));
+    }
+
+    Ok(available_devices)
+}
+
+/// A bulk endpoint address paired with its maximum packet (request) size.
+pub struct BulkEndpoint {
+    pub address: u8,
+    pub request_size: u16,
+}
+
 pub struct FtdiJtagDevice<H: UsbHandle = DeviceHandle<Context>> {
     handle: H,
+    info: DeviceInfo,
     iface: u8,
-    bulk_out_ep_adr: u8,
-    bulk_out_request_size: u16,
-    bulk_in_ep_adr: u8,
-    bulk_in_request_size: u16,
+    bulk_out: BulkEndpoint,
+    bulk_in: BulkEndpoint,
     timeout: Duration,
 }
 
@@ -65,7 +227,7 @@ impl<C: UsbContext> UsbHandle for DeviceHandle<C> {
 }
 
 impl<C: UsbContext> FtdiJtagDevice<DeviceHandle<C>> {
-    pub fn claim_interface(&self) -> rusb::Result<()> {
+    fn claim_interface(&self) -> rusb::Result<()> {
         match self.handle.set_auto_detach_kernel_driver(true) {
             Ok(()) | Err(rusb::Error::NotSupported) => {}
             Err(other) => return Err(other),
@@ -73,6 +235,10 @@ impl<C: UsbContext> FtdiJtagDevice<DeviceHandle<C>> {
         self.handle.claim_interface(self.iface)?;
 
         Ok(())
+    }
+
+    pub fn info(&self) -> &DeviceInfo {
+        &self.info
     }
 
     pub fn write_control(&self, request_type: u8, request: u8, value: u16) -> rusb::Result<usize> {
@@ -107,6 +273,7 @@ impl<C: UsbContext> FtdiJtagDevice<DeviceHandle<C>> {
     }
 
     pub fn ftdi_init(&self, loopback: bool) -> rusb::Result<()> {
+        self.claim_interface()?;
         self.reset()?;
         self.set_bitmode_mpsse()?;
         self.set_latency(2)?;
@@ -126,20 +293,18 @@ impl<C: UsbContext> FtdiJtagDevice<DeviceHandle<C>> {
 impl<H: UsbHandle> FtdiJtagDevice<H> {
     pub fn new(
         handle: H,
+        info: DeviceInfo,
         iface: u8,
-        bulk_out_ep_adr: u8,
-        bulk_out_request_size: u16,
-        bulk_in_ep_adr: u8,
-        bulk_in_request_size: u16,
+        bulk_out: BulkEndpoint,
+        bulk_in: BulkEndpoint,
         timeout: Duration,
     ) -> FtdiJtagDevice<H> {
         FtdiJtagDevice {
             handle,
+            info,
             iface,
-            bulk_out_ep_adr,
-            bulk_out_request_size,
-            bulk_in_ep_adr,
-            bulk_in_request_size,
+            bulk_out,
+            bulk_in,
             timeout,
         }
     }
@@ -148,21 +313,21 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
         while !values.is_empty() {
             let written = self
                 .handle
-                .write(self.bulk_out_ep_adr, values, self.timeout)?;
+                .write(self.bulk_out.address, values, self.timeout)?;
             values = &values[written..];
         }
         Ok(())
     }
 
     pub fn read(&self, out: &mut [u8]) -> rusb::Result<()> {
-        let packet = self.bulk_in_request_size as usize;
+        let packet = self.bulk_in.request_size as usize;
         let mut buf = vec![0u8; packet];
         let mut filled = 0;
 
         while filled < out.len() {
             let n = self
                 .handle
-                .read(self.bulk_in_ep_adr, &mut buf, self.timeout)?;
+                .read(self.bulk_in.address, &mut buf, self.timeout)?;
             let mut off = 0;
             while off < n {
                 let end = (off + packet).min(n);
@@ -256,12 +421,12 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
                 cmd_bitcount = 0;
                 let mut cmd_bit = 0x01;
                 let mut cmd_index: usize = 0;
-                let mut buf = vec![0u8; self.bulk_out_request_size as usize];
+                let mut buf = vec![0u8; self.bulk_out.request_size as usize];
                 buf[0] = 0;
                 while (num_bits != 0)
                     && (((tms[tdi_index] & tdi_bit) != 0) == tms_state)
                     && (((builder.as_slice().len() + (cmd_bitcount as usize / 8)) as u16)
-                        < (self.bulk_out_request_size - 5))
+                        < (self.bulk_out.request_size - 5))
                 {
                     if (tdi[tdi_index] & tdi_bit) != 0 {
                         buf[cmd_index] |= cmd_bit;
@@ -307,7 +472,7 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
 
                 if !((num_bits != 0)
                     && (((builder.as_slice().len() + (cmd_bitcount as usize / 8)) as u16)
-                        < (self.bulk_out_request_size - 6)))
+                        < (self.bulk_out.request_size - 6)))
                 {
                     break;
                 }
@@ -371,7 +536,7 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
 mod test {
     use std::{cell::RefCell, time::Duration};
 
-    use crate::ftdi_device::{FtdiJtagDevice, UsbHandle};
+    use crate::ftdi_device::{BulkEndpoint, DeviceInfo, FtdiJtagDevice, UsbHandle};
 
     // Simple recorder that just records the chunks that were sent
     struct Recorder {
@@ -410,11 +575,20 @@ mod test {
     fn make_dev(out_size: u16, in_size: u16) -> FtdiJtagDevice<Recorder> {
         FtdiJtagDevice {
             handle: Recorder::new(),
+            info: DeviceInfo {
+                manufacturer: Some("company".to_owned()),
+                product: Some("product".to_owned()),
+                serial: None,
+            },
             iface: 0,
-            bulk_out_ep_adr: 0x02,
-            bulk_out_request_size: out_size,
-            bulk_in_ep_adr: 0x81,
-            bulk_in_request_size: in_size,
+            bulk_out: BulkEndpoint {
+                address: 0x02,
+                request_size: out_size,
+            },
+            bulk_in: BulkEndpoint {
+                address: 0x81,
+                request_size: in_size,
+            },
             timeout: Duration::from_secs(1),
         }
     }

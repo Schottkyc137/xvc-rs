@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{mem::take, time::Duration};
 
 use ftdi_mpsse::{ClockBits, ClockData, ClockTMS, MpsseCmdBuilder, mpsse};
 use rusb::{Context, DeviceHandle, UsbContext};
@@ -190,13 +190,11 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
         let mut tdi_index = 0;
         let mut tdo_bit = 0x01;
         let mut tdo_index = 0;
-        let mut rx_bitcounts = vec![0u16; self.bulk_in_request_size as usize];
+        let mut rx_bitcounts = Vec::new();
 
         while num_bits != 0 {
-            // Reset the command buffer for this chunk (C: usb->txCount = 0).
             let mut builder = MpsseCmdBuilder::new();
             let mut rx_bytes_wanted = 0u32;
-            let mut rx_bitcount_index: usize = 0;
 
             loop {
                 // Stash TMS bits until bit limit reached or TDI would change state
@@ -246,8 +244,7 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
                     tdi_first_state,
                     cmd_bitcount as u8, // <= 6 here
                 );
-                rx_bitcounts[rx_bitcount_index] = cmd_bitcount as u16;
-                rx_bitcount_index += 1;
+                rx_bitcounts.push(cmd_bitcount);
                 rx_bytes_wanted += 1;
                 num_bits -= cmd_bitcount;
 
@@ -291,8 +288,7 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
                  */
                 if cmd_bitcount > 0 {
                     let cmd_bytes = cmd_bitcount / 8;
-                    rx_bitcounts[rx_bitcount_index] = cmd_bitcount as u16;
-                    rx_bitcount_index += 1;
+                    rx_bitcounts.push(cmd_bitcount);
                     if cmd_bitcount >= 8 {
                         rx_bytes_wanted += cmd_bytes;
                         cmd_bitcount -= cmd_bytes * 8;
@@ -328,9 +324,8 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
              * Process received data
              */
             let mut rx_index: usize = 0;
-            for i in 0..rx_bitcount_index {
-                let mut rx_bitcount: i32 = rx_bitcounts[i] as i32;
-                let mut rx_bit: i32 = if rx_bitcount < 8 {
+            for mut rx_bitcount in take(&mut rx_bitcounts) {
+                let mut rx_bit: u8 = if rx_bitcount < 8 {
                     0x1 << (8 - rx_bitcount)
                 } else {
                     0x01
@@ -340,16 +335,18 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
                     if tdo_bit == 0x1 {
                         tdo[tdo_index] = 0;
                     }
-                    if (rx_buf[rx_index] as i32 & rx_bit) != 0 {
+                    if (rx_buf[rx_index] & rx_bit) != 0 {
                         tdo[tdo_index] |= tdo_bit;
                     }
                     if rx_bit == 0x80 {
-                        rx_bit = if rx_bitcount < 8 {
-                            0x1 << (8 - rx_bitcount)
-                        } else {
-                            0x01
-                        };
                         rx_index += 1;
+                        if rx_bitcount != 0 {
+                            rx_bit = if rx_bitcount < 8 {
+                                0x1 << (8 - rx_bitcount)
+                            } else {
+                                0x01
+                            };
+                        }
                     } else {
                         rx_bit <<= 1;
                     }
@@ -361,6 +358,7 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
                     }
                 }
             }
+
             if rx_index != rx_bytes_wanted as usize {
                 log::warn!("consumed {} but supplied {}", rx_index, rx_bytes_wanted);
             }

@@ -58,26 +58,6 @@ impl<C: UsbContext> UsbHandle for DeviceHandle<C> {
 }
 
 impl<C: UsbContext> FtdiJtagDevice<DeviceHandle<C>> {
-    pub fn new(
-        handle: DeviceHandle<C>,
-        iface: u8,
-        bulk_out_ep_adr: u8,
-        bulk_out_request_size: u16,
-        bulk_in_ep_adr: u8,
-        bulk_in_request_size: u16,
-        timeout: Duration,
-    ) -> FtdiJtagDevice<DeviceHandle<C>> {
-        FtdiJtagDevice {
-            handle,
-            iface,
-            bulk_out_ep_adr,
-            bulk_out_request_size,
-            bulk_in_ep_adr,
-            bulk_in_request_size,
-            timeout,
-        }
-    }
-
     pub fn claim_interface(&self) -> rusb::Result<()> {
         match self.handle.set_auto_detach_kernel_driver(true) {
             Ok(()) | Err(rusb::Error::NotSupported) => {}
@@ -132,6 +112,26 @@ impl<C: UsbContext> FtdiJtagDevice<DeviceHandle<C>> {
 }
 
 impl<H: UsbHandle> FtdiJtagDevice<H> {
+    pub fn new(
+        handle: H,
+        iface: u8,
+        bulk_out_ep_adr: u8,
+        bulk_out_request_size: u16,
+        bulk_in_ep_adr: u8,
+        bulk_in_request_size: u16,
+        timeout: Duration,
+    ) -> FtdiJtagDevice<H> {
+        FtdiJtagDevice {
+            handle,
+            iface,
+            bulk_out_ep_adr,
+            bulk_out_request_size,
+            bulk_in_ep_adr,
+            bulk_in_request_size,
+            timeout,
+        }
+    }
+
     pub fn write(&self, mut values: &[u8]) -> rusb::Result<()> {
         while !values.is_empty() {
             let written = self
@@ -357,5 +357,146 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{cell::RefCell, time::Duration};
+
+    use crate::ftdi_device::{FtdiJtagDevice, UsbHandle};
+
+    // Simple recorder that just records the chunks that were sent
+    struct Recorder {
+        pub received: RefCell<Vec<Vec<u8>>>,
+    }
+
+    impl Recorder {
+        pub fn new() -> Recorder {
+            Recorder {
+                received: RefCell::default(),
+            }
+        }
+    }
+
+    impl UsbHandle for Recorder {
+        fn write(
+            &self,
+            _endpoint: u8,
+            buf: &[u8],
+            _timeout: std::time::Duration,
+        ) -> rusb::Result<usize> {
+            self.received.borrow_mut().push(buf.to_owned());
+            Ok(buf.len())
+        }
+
+        fn read(
+            &self,
+            _endpoint: u8,
+            buf: &mut [u8],
+            _timeout: std::time::Duration,
+        ) -> rusb::Result<usize> {
+            Ok(buf.len())
+        }
+    }
+
+    fn make_dev(out_size: u16, in_size: u16) -> FtdiJtagDevice<Recorder> {
+        FtdiJtagDevice {
+            handle: Recorder::new(),
+            iface: 0,
+            bulk_out_ep_adr: 0x02,
+            bulk_out_request_size: out_size,
+            bulk_in_ep_adr: 0x81,
+            bulk_in_request_size: in_size,
+            timeout: Duration::from_secs(1),
+        }
+    }
+
+    // Golden command-stream tests. Expected bytes are hand-traced from the
+    // algorithm and the ftdi-mpsse encoding:
+    //   clock_tms  => [0x6B, len-1, data | (tdi << 7)]
+    //   clock_bits => [0x3B, len-1, data]
+    //   clock_data => [0x39, lo(len-1), hi(len-1), bytes..]
+    // They should match the BerkeleyLab C reference byte-for-byte. The
+    // Recorder's read returns zeros, so TDO is not asserted here.
+
+    #[test]
+    fn one_tms_bit() {
+        // 1 bit, TMS low, TDI high -> a single 1-bit clock_tms carrying TDI in
+        // bit 7 of the data byte.
+        let dev = make_dev(512, 512);
+        let mut tdo = [0u8; 1];
+        dev.shift_chunks(1, &[0x01], &[0x00], &mut tdo).unwrap();
+
+        let sent = dev.handle.received.borrow();
+        assert_eq!(sent.len(), 1, "expected a single chunk");
+        assert_eq!(sent[0], [0x6B, 0x00, 0x80]);
+    }
+
+    #[test]
+    fn three_tms_bits() {
+        // 3 bits, all TMS (TDI constant) -> one 3-bit clock_tms. TMS 0b101 plus
+        // the duplicated final bit gives data 0x0D.
+        let dev = make_dev(512, 512);
+        let mut tdo = [0u8; 1];
+        dev.shift_chunks(3, &[0x00], &[0x05], &mut tdo).unwrap();
+
+        let sent = dev.handle.received.borrow();
+        assert_eq!(sent[0], [0x6B, 0x02, 0x0D]);
+    }
+
+    #[test]
+    fn tms_then_tdi_bits() {
+        // 4 bits, TMS low: the leading bit goes out as a 1-bit clock_tms, the
+        // remaining 3 TDI bits as a 3-bit clock_bits.
+        let dev = make_dev(512, 512);
+        let mut tdo = [0u8; 1];
+        dev.shift_chunks(4, &[0x0A], &[0x00], &mut tdo).unwrap();
+
+        let sent = dev.handle.received.borrow();
+        assert_eq!(sent[0], [0x6B, 0x00, 0x00, 0x3B, 0x02, 0x05]);
+    }
+
+    #[test]
+    fn tms_then_tdi_byte() {
+        // 9 bits, TMS low, TDI bit1 != bit0 so the leading clock_tms is 1 bit;
+        // the next 8 TDI bits (all 1) pack into a single-byte clock_data.
+        let dev = make_dev(512, 512);
+        let mut tdo = [0u8; 2];
+        dev.shift_chunks(9, &[0xFE, 0x01], &[0x00, 0x00], &mut tdo)
+            .unwrap();
+
+        let sent = dev.handle.received.borrow();
+        assert_eq!(sent[0], [0x6B, 0x00, 0x00, 0x39, 0x00, 0x00, 0xFF]);
+    }
+
+    #[test]
+    fn large_shift_splits_into_independent_chunks() {
+        // Regression test for the per-chunk buffer reset. With a tiny OUT
+        // request size, 200 bits span several USB transfers. Each recorded
+        // chunk must be self-contained: starting with a clock_tms (0x6B) and
+        // bounded by the request size. Before the reset fix, each chunk
+        // re-sent all prior chunks, so lengths grew without bound.
+        let out_size = 16u16;
+        let dev = make_dev(out_size, 64);
+        let tdi = vec![0xA5u8; 32];
+        let tms = vec![0x00u8; 32];
+        let mut tdo = vec![0u8; 32];
+        dev.shift_chunks(200, &tdi, &tms, &mut tdo).unwrap();
+
+        let sent = dev.handle.received.borrow();
+        assert!(
+            sent.len() >= 2,
+            "expected multiple chunks, got {}",
+            sent.len()
+        );
+        for chunk in sent.iter() {
+            assert_eq!(chunk[0], 0x6B, "each chunk must begin with a clock_tms");
+            assert!(
+                chunk.len() <= 2 * out_size as usize,
+                "chunk length {} suggests buffer was not reset",
+                chunk.len()
+            );
+        }
     }
 }

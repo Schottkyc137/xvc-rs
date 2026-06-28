@@ -12,6 +12,10 @@ const KNOWN_PRODUCT_IDS: &[u16] = &[
     0x6014, // FT232H
 ];
 
+/// Maximum number of consecutive status-only (no-payload) bulk reads to tolerate
+/// in [`FtdiJtagDevice::read`] before giving up on a stalled device.
+const MAX_EMPTY_READS: u32 = 1024;
+
 const FTDI_PIN_TCK: u8 = 0x1;
 const FTDI_PIN_TDI: u8 = 0x2;
 #[allow(unused)]
@@ -135,19 +139,30 @@ pub fn list_available_devices(
                     if input_ep.is_none() {
                         input_ep = Some(ep)
                     } else {
-                        panic!("Multiple input endpoints");
+                        log::warn!("Unsupported FTDI device: too many input endpoints");
+                        continue;
                     }
                 }
                 (rusb::TransferType::Bulk, rusb::Direction::Out) => {
                     if output_ep.is_none() {
                         output_ep = Some(ep);
                     } else {
-                        panic!("Multiple output endpoints");
+                        log::warn!("Unsupported FTDI device: too many output endpoints");
+                        continue;
                     }
                 }
                 _ => {}
             }
         }
+
+        let Some(output_ep) = output_ep else {
+            log::warn!("Unsupported FTDI device: no output endpoints");
+            continue;
+        };
+        let Some(input_ep) = input_ep else {
+            log::warn!("Unsupported FTDI device: no input endpoints");
+            continue;
+        };
 
         let handle = device.open()?;
 
@@ -172,9 +187,6 @@ pub fn list_available_devices(
             product,
             serial: serial_number,
         };
-
-        let output_ep = output_ep.expect("Expected exactly one output endpoint");
-        let input_ep = input_ep.expect("Expected exactly one input endpoint");
 
         available_devices.push(FtdiJtagDevice::new(
             handle,
@@ -324,10 +336,17 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
         let mut buf = vec![0u8; packet];
         let mut filled = 0;
 
+        // The FTDI bulk-IN endpoint emits a 2-byte modem-status packet every
+        // latency-timer period whether or not there is payload, so a stalled or
+        // disconnected device keeps returning status-only reads without ever
+        // erroring. Give up once that many consecutive reads carry no payload.
+        let mut empty_reads = 0;
+
         while filled < out.len() {
             let n = self
                 .handle
                 .read(self.bulk_in.address, &mut buf, self.timeout)?;
+            let before = filled;
             let mut off = 0;
             while off < n {
                 let end = (off + packet).min(n);
@@ -338,6 +357,15 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
                     filled += take;
                 }
                 off = end;
+            }
+
+            if filled > before {
+                empty_reads = 0;
+            } else {
+                empty_reads += 1;
+                if empty_reads >= MAX_EMPTY_READS {
+                    return Err(rusb::Error::Timeout);
+                }
             }
         }
         Ok(())
@@ -351,6 +379,9 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
         tms: &[u8],
         tdo: &mut [u8],
     ) -> rusb::Result<()> {
+        assert!(tdi.len() == tms.len());
+        assert!(num_bits.div_ceil(8) as usize == tdi.len());
+
         let mut tdi_bit = 0x01;
         let mut tdi_index = 0;
         let mut tdo_bit = 0x01;
@@ -593,18 +624,8 @@ mod test {
         }
     }
 
-    // Golden command-stream tests. Expected bytes are hand-traced from the
-    // algorithm and the ftdi-mpsse encoding:
-    //   clock_tms  => [0x6B, len-1, data | (tdi << 7)]
-    //   clock_bits => [0x3B, len-1, data]
-    //   clock_data => [0x39, lo(len-1), hi(len-1), bytes..]
-    // They should match the BerkeleyLab C reference byte-for-byte. The
-    // Recorder's read returns zeros, so TDO is not asserted here.
-
     #[test]
     fn one_tms_bit() {
-        // 1 bit, TMS low, TDI high -> a single 1-bit clock_tms carrying TDI in
-        // bit 7 of the data byte.
         let dev = make_dev(512, 512);
         let mut tdo = [0u8; 1];
         dev.shift_chunks(1, &[0x01], &[0x00], &mut tdo).unwrap();
@@ -616,8 +637,6 @@ mod test {
 
     #[test]
     fn three_tms_bits() {
-        // 3 bits, all TMS (TDI constant) -> one 3-bit clock_tms. TMS 0b101 plus
-        // the duplicated final bit gives data 0x0D.
         let dev = make_dev(512, 512);
         let mut tdo = [0u8; 1];
         dev.shift_chunks(3, &[0x00], &[0x05], &mut tdo).unwrap();
@@ -628,8 +647,6 @@ mod test {
 
     #[test]
     fn tms_then_tdi_bits() {
-        // 4 bits, TMS low: the leading bit goes out as a 1-bit clock_tms, the
-        // remaining 3 TDI bits as a 3-bit clock_bits.
         let dev = make_dev(512, 512);
         let mut tdo = [0u8; 1];
         dev.shift_chunks(4, &[0x0A], &[0x00], &mut tdo).unwrap();
@@ -640,8 +657,6 @@ mod test {
 
     #[test]
     fn tms_then_tdi_byte() {
-        // 9 bits, TMS low, TDI bit1 != bit0 so the leading clock_tms is 1 bit;
-        // the next 8 TDI bits (all 1) pack into a single-byte clock_data.
         let dev = make_dev(512, 512);
         let mut tdo = [0u8; 2];
         dev.shift_chunks(9, &[0xFE, 0x01], &[0x00, 0x00], &mut tdo)
@@ -653,9 +668,6 @@ mod test {
 
     #[test]
     fn single_chunk_over_255_bits_does_not_overflow() {
-        // Regression: with a realistic 512-byte OUT buffer, >255 bits pack into
-        // one chunk, so cmd_bitcount exceeds u8 range. Used to panic with
-        // "attempt to add with overflow".
         let dev = make_dev(512, 512);
         let num_bits = 300u32;
         let num_bytes = num_bits.div_ceil(8) as usize;
@@ -667,17 +679,14 @@ mod test {
 
     #[test]
     fn large_shift_splits_into_independent_chunks() {
-        // Regression test for the per-chunk buffer reset. With a tiny OUT
-        // request size, 200 bits span several USB transfers. Each recorded
-        // chunk must be self-contained: starting with a clock_tms (0x6B) and
-        // bounded by the request size. Before the reset fix, each chunk
-        // re-sent all prior chunks, so lengths grew without bound.
         let out_size = 16u16;
         let dev = make_dev(out_size, 64);
-        let tdi = vec![0xA5u8; 32];
-        let tms = vec![0x00u8; 32];
-        let mut tdo = vec![0u8; 32];
-        dev.shift_chunks(200, &tdi, &tms, &mut tdo).unwrap();
+        let num_bits = 256u32;
+        let num_bytes = num_bits.div_ceil(8) as usize;
+        let tdi = vec![0xA5u8; num_bytes];
+        let tms = vec![0x00u8; num_bytes];
+        let mut tdo = vec![0u8; num_bytes];
+        dev.shift_chunks(num_bits, &tdi, &tms, &mut tdo).unwrap();
 
         let sent = dev.handle.received.borrow();
         assert!(

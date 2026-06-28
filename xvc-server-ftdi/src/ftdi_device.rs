@@ -178,58 +178,55 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
         Ok(())
     }
 
+    // This implementation is mainly translated from https://github.com/BerkeleyLab/XVC-FTDI-JTAG/blob/9633c44ee3c282e9745278af8fcc3e497d178d9b/ftdiJTAG.c#L594
     pub fn shift_chunks(
         &self,
-        mut n_bits: u32,
+        mut num_bits: u32,
         tdi: &[u8],
         tms: &[u8],
         tdo: &mut [u8],
     ) -> rusb::Result<()> {
-        let mut i_bit: i32 = 0x01;
-        let mut i_index: usize = 0;
-        let mut tdo_bit: i32 = 0x01;
-        let mut tdo_index: usize = 0;
+        let mut tdi_bit = 0x01;
+        let mut tdi_index = 0;
+        let mut tdo_bit = 0x01;
+        let mut tdo_index = 0;
         let mut rx_bitcounts = vec![0u16; self.bulk_in_request_size as usize];
 
-        while n_bits != 0 {
+        while num_bits != 0 {
             // Reset the command buffer for this chunk (C: usb->txCount = 0).
             let mut builder = MpsseCmdBuilder::new();
-            let mut rx_bytes_wanted: i32 = 0;
+            let mut rx_bytes_wanted = 0u32;
             let mut rx_bitcount_index: usize = 0;
 
-            // do { ... } while (...)
             loop {
-                /*
-                 * Stash TMS bits until bit limit reached or TDI would change state
-                 */
-                let tdi_first_state: bool = (tdi[i_index] as i32 & i_bit) != 0;
-                let mut cmd_bitcount: u8 = 0;
-                let mut cmd_bit: u8 = 0x01;
-                let mut tms_bits: u8 = 0;
-                let mut tms_bit: u8;
-                // do { ... } while (...)
-                loop {
-                    tms_bit = if (tms[i_index] as i32 & i_bit) != 0 {
+                // Stash TMS bits until bit limit reached or TDI would change state
+                let tdi_first_state = (tdi[tdi_index] & tdi_bit) != 0;
+                let mut cmd_bitcount = 0;
+                let mut cmd_bit = 0x01;
+                let mut tms_bits = 0;
+
+                let tms_bit = loop {
+                    let tms_bit = if (tms[tdi_index] & tdi_bit) != 0 {
                         cmd_bit
                     } else {
                         0
                     };
                     tms_bits |= tms_bit;
-                    if i_bit == 0x80 {
-                        i_bit = 0x01;
-                        i_index += 1;
+                    if tdi_bit == 0x80 {
+                        tdi_bit = 0x01;
+                        tdi_index += 1;
                     } else {
-                        i_bit <<= 1;
+                        tdi_bit <<= 1;
                     }
                     cmd_bitcount += 1;
                     cmd_bit <<= 1;
                     if !((cmd_bitcount < 6)
-                        && ((cmd_bitcount as u32) < n_bits)
-                        && (((tdi[i_index] as i32 & i_bit) != 0) == tdi_first_state))
+                        && (cmd_bitcount < num_bits)
+                        && (((tdi[tdi_index] & tdi_bit) != 0) == tdi_first_state))
                     {
-                        break;
+                        break tms_bit;
                     }
-                }
+                };
 
                 /*
                  * Duplicate the final TMS bit so the TMS pin holds
@@ -238,7 +235,7 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
                  * we need space to hold the copy of the final bit.
                  */
                 tms_bits |= tms_bit << 1;
-                let tms_state: bool = tms_bit != 0;
+                let tms_state = tms_bit != 0;
 
                 /*
                  * Send the TMS bits and TDI value.
@@ -247,12 +244,12 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
                     ClockTMS::NegTMSPosTDO,
                     tms_bits,
                     tdi_first_state,
-                    cmd_bitcount,
+                    cmd_bitcount as u8, // <= 6 here
                 );
                 rx_bitcounts[rx_bitcount_index] = cmd_bitcount as u16;
                 rx_bitcount_index += 1;
                 rx_bytes_wanted += 1;
-                n_bits -= cmd_bitcount as u32;
+                num_bits -= cmd_bitcount;
 
                 /*
                  * Stash TDI bits until bit limit reached
@@ -260,16 +257,16 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
                  * or transmitter buffer capacity reached.
                  */
                 cmd_bitcount = 0;
-                cmd_bit = 0x01;
+                let mut cmd_bit = 0x01;
                 let mut cmd_index: usize = 0;
                 let mut buf = vec![0u8; self.bulk_out_request_size as usize];
                 buf[0] = 0;
-                while (n_bits != 0)
-                    && (((tms[i_index] as i32 & i_bit) != 0) == tms_state)
+                while (num_bits != 0)
+                    && (((tms[tdi_index] & tdi_bit) != 0) == tms_state)
                     && (((builder.as_slice().len() + (cmd_bitcount as usize / 8)) as u16)
                         < (self.bulk_out_request_size - 5))
                 {
-                    if (tdi[i_index] as i32 & i_bit) != 0 {
+                    if (tdi[tdi_index] & tdi_bit) != 0 {
                         buf[cmd_index] |= cmd_bit;
                     }
                     if cmd_bit == 0x80 {
@@ -279,14 +276,14 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
                     } else {
                         cmd_bit <<= 1;
                     }
-                    if i_bit == 0x80 {
-                        i_bit = 0x01;
-                        i_index += 1;
+                    if tdi_bit == 0x80 {
+                        tdi_bit = 0x01;
+                        tdi_index += 1;
                     } else {
-                        i_bit <<= 1;
+                        tdi_bit <<= 1;
                     }
                     cmd_bitcount += 1;
-                    n_bits -= 1;
+                    num_bits -= 1;
                 }
 
                 /*
@@ -297,7 +294,7 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
                     rx_bitcounts[rx_bitcount_index] = cmd_bitcount as u16;
                     rx_bitcount_index += 1;
                     if cmd_bitcount >= 8 {
-                        rx_bytes_wanted += cmd_bytes as i32;
+                        rx_bytes_wanted += cmd_bytes;
                         cmd_bitcount -= cmd_bytes * 8;
                         builder =
                             builder.clock_data(ClockData::LsbPosIn, &buf[..cmd_bytes as usize]);
@@ -307,12 +304,12 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
                         builder = builder.clock_bits(
                             ClockBits::LsbPosIn,
                             buf[cmd_bytes as usize],
-                            cmd_bitcount,
+                            cmd_bitcount as u8, // < 8 here (remainder after whole bytes)
                         );
                     }
                 }
 
-                if !((n_bits != 0)
+                if !((num_bits != 0)
                     && (((builder.as_slice().len() + (cmd_bitcount as usize / 8)) as u16)
                         < (self.bulk_out_request_size - 6)))
                 {
@@ -344,7 +341,7 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
                         tdo[tdo_index] = 0;
                     }
                     if (rx_buf[rx_index] as i32 & rx_bit) != 0 {
-                        tdo[tdo_index] |= tdo_bit as u8;
+                        tdo[tdo_index] |= tdo_bit;
                     }
                     if rx_bit == 0x80 {
                         rx_bit = if rx_bitcount < 8 {
@@ -364,7 +361,7 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
                     }
                 }
             }
-            if rx_index as i32 != rx_bytes_wanted {
+            if rx_index != rx_bytes_wanted as usize {
                 log::warn!("consumed {} but supplied {}", rx_index, rx_bytes_wanted);
             }
         }
@@ -480,6 +477,20 @@ mod test {
 
         let sent = dev.handle.received.borrow();
         assert_eq!(sent[0], [0x6B, 0x00, 0x00, 0x39, 0x00, 0x00, 0xFF]);
+    }
+
+    #[test]
+    fn single_chunk_over_255_bits_does_not_overflow() {
+        // Regression: with a realistic 512-byte OUT buffer, >255 bits pack into
+        // one chunk, so cmd_bitcount exceeds u8 range. Used to panic with
+        // "attempt to add with overflow".
+        let dev = make_dev(512, 512);
+        let num_bits = 300u32;
+        let num_bytes = num_bits.div_ceil(8) as usize;
+        let tdi = vec![0xA5u8; num_bytes];
+        let tms = vec![0x00u8; num_bytes];
+        let mut tdo = vec![0u8; num_bytes];
+        dev.shift_chunks(num_bits, &tdi, &tms, &mut tdo).unwrap();
     }
 
     #[test]

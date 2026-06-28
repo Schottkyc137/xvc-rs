@@ -141,6 +141,12 @@ impl XvcClient {
         self.write_message(BorrowedMessage::Shift { num_bits, tms, tdi })
             .await?;
         let num_bytes = num_bits.div_ceil(8) as usize;
+        assert!(
+            tms.len() == num_bytes && tdi.len() == num_bytes,
+            "tms/tdi must be {num_bytes} bytes for {num_bits} bits, got {} / {}",
+            tms.len(),
+            tdi.len(),
+        );
         let mut buf = vec![0u8; num_bytes];
         self.tcp.read_exact(&mut buf).await?;
         Ok(buf.into_boxed_slice())

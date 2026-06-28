@@ -3,16 +3,6 @@ use std::time::Duration;
 use ftdi_mpsse::{ClockBits, ClockData, ClockTMS, MpsseCmdBuilder, mpsse};
 use rusb::{Context, DeviceHandle, UsbContext};
 
-pub struct FtdiJtagDevice<C: UsbContext = Context> {
-    handle: DeviceHandle<C>,
-    iface: u8,
-    bulk_out_ep_adr: u8,
-    bulk_out_request_size: u16,
-    bulk_in_ep_adr: u8,
-    bulk_in_request_size: u16,
-    timeout: Duration,
-}
-
 const FTDI_PIN_TCK: u8 = 0x1;
 const FTDI_PIN_TDI: u8 = 0x2;
 #[allow(unused)]
@@ -41,7 +31,33 @@ mpsse! {
     };
 }
 
-impl<C: UsbContext> FtdiJtagDevice<C> {
+pub struct FtdiJtagDevice<H: UsbHandle = DeviceHandle<Context>> {
+    handle: H,
+    iface: u8,
+    bulk_out_ep_adr: u8,
+    bulk_out_request_size: u16,
+    bulk_in_ep_adr: u8,
+    bulk_in_request_size: u16,
+    timeout: Duration,
+}
+
+pub trait UsbHandle {
+    fn write(&self, endpoint: u8, buf: &[u8], timeout: Duration) -> rusb::Result<usize>;
+
+    fn read(&self, endpoint: u8, buf: &mut [u8], timeout: Duration) -> rusb::Result<usize>;
+}
+
+impl<C: UsbContext> UsbHandle for DeviceHandle<C> {
+    fn write(&self, endpoint: u8, buf: &[u8], timeout: Duration) -> rusb::Result<usize> {
+        self.write_bulk(endpoint, buf, timeout)
+    }
+
+    fn read(&self, endpoint: u8, buf: &mut [u8], timeout: Duration) -> rusb::Result<usize> {
+        self.read_bulk(endpoint, buf, timeout)
+    }
+}
+
+impl<C: UsbContext> FtdiJtagDevice<DeviceHandle<C>> {
     pub fn new(
         handle: DeviceHandle<C>,
         iface: u8,
@@ -50,7 +66,7 @@ impl<C: UsbContext> FtdiJtagDevice<C> {
         bulk_in_ep_adr: u8,
         bulk_in_request_size: u16,
         timeout: Duration,
-    ) -> FtdiJtagDevice<C> {
+    ) -> FtdiJtagDevice<DeviceHandle<C>> {
         FtdiJtagDevice {
             handle,
             iface,
@@ -60,40 +76,6 @@ impl<C: UsbContext> FtdiJtagDevice<C> {
             bulk_in_request_size,
             timeout,
         }
-    }
-
-    pub fn write(&self, mut values: &[u8]) -> rusb::Result<()> {
-        while !values.is_empty() {
-            let written = self
-                .handle
-                .write_bulk(self.bulk_out_ep_adr, values, self.timeout)?;
-            values = &values[written..];
-        }
-        Ok(())
-    }
-
-    pub fn read(&self, out: &mut [u8]) -> rusb::Result<()> {
-        let packet = self.bulk_in_request_size as usize;
-        let mut buf = vec![0u8; packet];
-        let mut filled = 0;
-
-        while filled < out.len() {
-            let n = self
-                .handle
-                .read_bulk(self.bulk_in_ep_adr, &mut buf, self.timeout)?;
-            let mut off = 0;
-            while off < n {
-                let end = (off + packet).min(n);
-                if end > off + 2 {
-                    let payload = &buf[off + 2..end]; // strip 2 status bytes
-                    let take = payload.len().min(out.len() - filled);
-                    out[filled..filled + take].copy_from_slice(&payload[..take]);
-                    filled += take;
-                }
-                off = end;
-            }
-        }
-        Ok(())
     }
 
     pub fn claim_interface(&self) -> rusb::Result<()> {
@@ -145,6 +127,42 @@ impl<C: UsbContext> FtdiJtagDevice<C> {
         self.purge_rx()?;
 
         self.write(&INIT_CMD)?;
+        Ok(())
+    }
+}
+
+impl<H: UsbHandle> FtdiJtagDevice<H> {
+    pub fn write(&self, mut values: &[u8]) -> rusb::Result<()> {
+        while !values.is_empty() {
+            let written = self
+                .handle
+                .write(self.bulk_out_ep_adr, values, self.timeout)?;
+            values = &values[written..];
+        }
+        Ok(())
+    }
+
+    pub fn read(&self, out: &mut [u8]) -> rusb::Result<()> {
+        let packet = self.bulk_in_request_size as usize;
+        let mut buf = vec![0u8; packet];
+        let mut filled = 0;
+
+        while filled < out.len() {
+            let n = self
+                .handle
+                .read(self.bulk_in_ep_adr, &mut buf, self.timeout)?;
+            let mut off = 0;
+            while off < n {
+                let end = (off + packet).min(n);
+                if end > off + 2 {
+                    let payload = &buf[off + 2..end]; // strip 2 status bytes
+                    let take = payload.len().min(out.len() - filled);
+                    out[filled..filled + take].copy_from_slice(&payload[..take]);
+                    filled += take;
+                }
+                off = end;
+            }
+        }
         Ok(())
     }
 

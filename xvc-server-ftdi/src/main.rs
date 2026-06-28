@@ -25,6 +25,9 @@ struct Args {
 
     #[arg(short, long, default_value = "0")]
     ftdi_port: usize,
+
+    #[arg(short, long)]
+    loopback: bool,
 }
 
 #[tokio::main]
@@ -53,11 +56,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut available_devices = Vec::new();
 
-    println!("Available devices: {}", ctx.devices()?.len());
-
     for device in ctx.devices()?.iter() {
         let descriptor = device.device_descriptor()?;
-        println!("Found device: {:?}", descriptor);
 
         if descriptor.class_code() != LIBUSB_CLASS_PER_INTERFACE {
             log::trace!(
@@ -156,9 +156,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     device.claim_interface()?;
-    device.ftdi_init()?;
-
-    // MARK: END
+    device.ftdi_init(args.loopback)?;
 
     let addr = SocketAddr::new(args.ip, args.port);
 

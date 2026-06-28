@@ -29,6 +29,13 @@ mpsse! {
         disable_adaptive_data_clocking();
         set_gpio_lower(FTDI_PIN_TMS, FTDI_PIN_TCK | FTDI_PIN_TDI | FTDI_PIN_TMS);
     };
+
+    const INIT_CMD_LOOPBACK = {
+        enable_loopback();
+        disable_3phase_data_clocking();
+        disable_adaptive_data_clocking();
+        set_gpio_lower(FTDI_PIN_TMS, FTDI_PIN_TCK | FTDI_PIN_TDI | FTDI_PIN_TMS);
+    };
 }
 
 pub struct FtdiJtagDevice<H: UsbHandle = DeviceHandle<Context>> {
@@ -99,14 +106,19 @@ impl<C: UsbContext> FtdiJtagDevice<DeviceHandle<C>> {
         self.write_control(BMREQTYPE_OUT, BREQ_RESET, WVAL_RESET_PURGE_RX)
     }
 
-    pub fn ftdi_init(&self) -> rusb::Result<()> {
+    pub fn ftdi_init(&self, loopback: bool) -> rusb::Result<()> {
         self.reset()?;
         self.set_bitmode_mpsse()?;
         self.set_latency(2)?;
         self.purge_tx()?;
         self.purge_rx()?;
 
-        self.write(&INIT_CMD)?;
+        if loopback {
+            self.write(&INIT_CMD_LOOPBACK)?;
+        } else {
+            self.write(&INIT_CMD)?;
+        }
+
         Ok(())
     }
 }

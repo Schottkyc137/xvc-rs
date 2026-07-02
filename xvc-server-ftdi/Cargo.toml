@@ -17,6 +17,7 @@ xvc-protocol = { version = "0.2.0", path = "../xvc-protocol" }
 xvc-server = { version = "0.2.0", path = "../xvc-server" }
 rusb = { version = "0.9.4", features = ["vendored"] }
 ftdi-mpsse = "0.1.2"
+inquire = "0.9.4"
 
 [[bin]]
 name = "xvc-ftdi"

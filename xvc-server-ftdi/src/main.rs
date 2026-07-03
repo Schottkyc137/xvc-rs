@@ -1,17 +1,17 @@
 use clap::Parser;
 use env_logger::Env;
-use inquire::{InquireError, Select};
 use std::{
     error::Error,
-    fmt::Display,
+    io::{IsTerminal, stderr, stdin},
     net::{IpAddr, SocketAddr},
 };
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use xvc_server::server::{Config, Server};
 
-use crate::{ftdi_device::FtdiJtagDevice, ftdi_server::FtdiServer};
+use crate::{disambiguation::disambiguate_available_devices, ftdi_server::FtdiServer};
 
+mod disambiguation;
 mod ftdi_device;
 mod ftdi_server;
 
@@ -32,55 +32,9 @@ struct Args {
     #[arg(short, long, default_value_t = false)]
     loopback: bool,
 
-    /// Whether to present the option interactively
-    #[arg(short, long, default_value_t = true)]
-    interactive: bool,
-}
-
-fn disambiguate_available_devices(
-    mut available: Vec<FtdiJtagDevice>,
-    interactive: bool,
-) -> Option<FtdiJtagDevice> {
-    if available.is_empty() {
-        return None;
-    }
-    if available.len() == 1 {
-        return Some(available.pop().unwrap());
-    }
-    if !interactive {
-        log::error!("Multiple devices found");
-        return None;
-    }
-
-    struct Wrapper {
-        device: FtdiJtagDevice,
-    }
-
-    impl Display for Wrapper {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "{}", self.device.info())
-        }
-    }
-
-    let res = Select::new(
-        "Multiple matching devices found",
-        available
-            .into_iter()
-            .map(|avail| Wrapper { device: avail })
-            .collect(),
-    )
-    .prompt()
-    .inspect_err(|err| {
-        if !matches!(
-            err,
-            InquireError::OperationCanceled | InquireError::OperationInterrupted
-        ) {
-            log::error!("{err}");
-        }
-    })
-    .ok()?;
-
-    Some(res.device)
+    /// Never prompt; fail instead of asking when multiple devices match
+    #[arg(short, long, default_value_t = false)]
+    non_interactive: bool,
 }
 
 #[tokio::main]
@@ -96,7 +50,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let available_devices =
         ftdi_device::list_available_devices(args.ftdi_port, config.read_write_timeout)?;
 
-    let Some(device) = disambiguate_available_devices(available_devices, args.interactive) else {
+    let interactive = !args.non_interactive && stdin().is_terminal() && stderr().is_terminal();
+    let Some(device) = disambiguate_available_devices(available_devices, interactive) else {
         return Ok(());
     };
 
@@ -106,7 +61,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let addr = SocketAddr::new(args.ip, args.port);
 
     let listener = TcpListener::bind(addr).await?;
-    log::info!("Listening on {}", addr);
+    log::info!("Listening on {addr}");
 
     let token = CancellationToken::new();
     tokio::spawn({

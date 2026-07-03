@@ -12,6 +12,16 @@ const KNOWN_PRODUCT_IDS: &[u16] = &[
     0x6014, // FT232H
 ];
 
+/// The chip model name for a known FTDI product id.
+fn chip_model(product_id: u16) -> Option<&'static str> {
+    match product_id {
+        0x6010 => Some("FT2232H"),
+        0x6011 => Some("FT4232H"),
+        0x6014 => Some("FT232H"),
+        _ => None,
+    }
+}
+
 /// Maximum number of consecutive status-only (no-payload) bulk reads to tolerate
 /// in [`FtdiJtagDevice::read`] before giving up on a stalled device.
 const MAX_EMPTY_READS: u32 = 1024;
@@ -55,6 +65,16 @@ pub struct DeviceInfo {
     pub manufacturer: Option<String>,
     pub product: Option<String>,
     pub serial: Option<String>,
+    pub product_id: u16,
+    pub bus_number: u8,
+    pub address: u8,
+}
+
+impl DeviceInfo {
+    /// The chip model name (e.g. "FT2232H"), if the product id is known.
+    pub fn chip_model(&self) -> Option<&'static str> {
+        chip_model(self.product_id)
+    }
 }
 
 impl Display for DeviceInfo {
@@ -62,18 +82,21 @@ impl Display for DeviceInfo {
         write!(f, "{}", self.product.as_deref().unwrap_or("FTDI device"))?;
 
         let mut details = Vec::new();
+        if let Some(chip) = self.chip_model() {
+            details.push(chip.to_owned());
+        }
         if let Some(manufacturer) = &self.manufacturer {
             details.push(format!("by {manufacturer}"));
         }
         if let Some(serial) = &self.serial {
             details.push(format!("serial {serial}"));
         }
+        details.push(format!(
+            "bus {:03} device {:03}",
+            self.bus_number, self.address
+        ));
 
-        if !details.is_empty() {
-            write!(f, " ({})", details.join(", "))?;
-        }
-
-        Ok(())
+        write!(f, " ({})", details.join(", "))
     }
 }
 
@@ -186,6 +209,9 @@ pub fn list_available_devices(
             manufacturer,
             product,
             serial: serial_number,
+            product_id: descriptor.product_id(),
+            bus_number: device.bus_number(),
+            address: device.address(),
         };
 
         available_devices.push(FtdiJtagDevice::new(
@@ -610,6 +636,9 @@ mod test {
                 manufacturer: Some("company".to_owned()),
                 product: Some("product".to_owned()),
                 serial: None,
+                product_id: 0x6010,
+                bus_number: 1,
+                address: 4,
             },
             iface: 0,
             bulk_out: BulkEndpoint {

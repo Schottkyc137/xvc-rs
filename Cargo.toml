@@ -4,6 +4,7 @@ members = [
     "xvc-protocol",
     "xvc-server",
     "xvc-server-debugbridge",
+    "xvc-server-usb",
     "xvc-tests",
 ]
 default-members = [
@@ -11,6 +12,7 @@ default-members = [
     "xvc-protocol",
     "xvc-server",
     "xvc-server-debugbridge",
+    "xvc-server-usb",
     "xvc-tests",
 ]
 resolver = "3"

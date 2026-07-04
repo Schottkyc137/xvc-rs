@@ -1,7 +1,7 @@
 use std::{fmt::Display, mem::take, time::Duration};
 
 use ftdi_mpsse::{ClockBits, ClockData, ClockTMS, MpsseCmdBuilder, mpsse};
-use rusb::{Context, DeviceHandle, UsbContext, constants::LIBUSB_CLASS_PER_INTERFACE};
+use rusb::{Context, Device, DeviceHandle, UsbContext, constants::LIBUSB_CLASS_PER_INTERFACE};
 
 const FTDI_VID: u16 = 0x0403;
 
@@ -100,6 +100,135 @@ impl Display for DeviceInfo {
     }
 }
 
+fn check_device(
+    device: Device<rusb::Context>,
+    ftdi_port: usize,
+    timeout: Duration,
+) -> rusb::Result<Option<FtdiJtagDevice>> {
+    let descriptor = device.device_descriptor()?;
+
+    if descriptor.class_code() != LIBUSB_CLASS_PER_INTERFACE {
+        log::trace!(
+            "Rejecting {:?}: wrong class {}",
+            device,
+            descriptor.class_code()
+        );
+        return Ok(None);
+    }
+
+    if descriptor.vendor_id() != FTDI_VID {
+        log::trace!(
+            "Rejecting {:?}: vendor id (0x{:x}) not FTDI id",
+            device,
+            descriptor.vendor_id()
+        );
+        return Ok(None);
+    }
+
+    if !KNOWN_PRODUCT_IDS.contains(&descriptor.product_id()) {
+        log::trace!(
+            "Rejecting {:?}: product id (0x{:x}) not known FTDI id",
+            device,
+            descriptor.product_id()
+        );
+        return Ok(None);
+    }
+
+    let dev_config = device
+        .active_config_descriptor()
+        .or(device.config_descriptor(0))?;
+
+    let Some(iface) = dev_config.interfaces().nth(ftdi_port) else {
+        log::trace!(
+            "Rejecting {:?}: too few interfaces: requested at index {}, available {}",
+            device,
+            ftdi_port,
+            dev_config.num_interfaces()
+        );
+        return Ok(None);
+    };
+
+    // FTDI has only one descriptor
+    let Some(iface_desc) = iface.descriptors().next() else {
+        log::warn!("Unsupported FTDI device: No interface descriptors");
+        return Ok(None);
+    };
+    let mut output_ep = None;
+    let mut input_ep = None;
+    for ep in iface_desc.endpoint_descriptors() {
+        match (ep.transfer_type(), ep.direction()) {
+            (rusb::TransferType::Bulk, rusb::Direction::In) => {
+                if input_ep.is_none() {
+                    input_ep = Some(ep)
+                } else {
+                    log::warn!("Unsupported FTDI device: too many input endpoints");
+                    return Ok(None);
+                }
+            }
+            (rusb::TransferType::Bulk, rusb::Direction::Out) => {
+                if output_ep.is_none() {
+                    output_ep = Some(ep);
+                } else {
+                    log::warn!("Unsupported FTDI device: too many output endpoints");
+                    return Ok(None);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let Some(output_ep) = output_ep else {
+        log::warn!("Unsupported FTDI device: no output endpoints");
+        return Ok(None);
+    };
+    let Some(input_ep) = input_ep else {
+        log::warn!("Unsupported FTDI device: no input endpoints");
+        return Ok(None);
+    };
+
+    let handle = device.open()?;
+
+    let manufacturer = if let Some(idx) = descriptor.manufacturer_string_index() {
+        Some(handle.read_string_descriptor_ascii(idx)?)
+    } else {
+        None
+    };
+    let product = if let Some(idx) = descriptor.product_string_index() {
+        Some(handle.read_string_descriptor_ascii(idx)?)
+    } else {
+        None
+    };
+    let serial_number = if let Some(idx) = descriptor.serial_number_string_index() {
+        Some(handle.read_string_descriptor_ascii(idx)?)
+    } else {
+        None
+    };
+
+    let info = DeviceInfo {
+        manufacturer,
+        product,
+        serial: serial_number,
+        product_id: descriptor.product_id(),
+        bus_number: device.bus_number(),
+        address: device.address(),
+    };
+
+    Ok(Some(FtdiJtagDevice::new(
+        handle,
+        info,
+        iface.number(),
+        BulkEndpoint {
+            address: output_ep.address(),
+            request_size: output_ep.max_packet_size(),
+        },
+        BulkEndpoint {
+            address: input_ep.address(),
+            request_size: input_ep.max_packet_size(),
+        },
+        timeout,
+    )))
+}
+
 pub fn list_available_devices(
     ftdi_port: usize,
     timeout: Duration,
@@ -109,125 +238,14 @@ pub fn list_available_devices(
     let mut available_devices = Vec::new();
 
     for device in ctx.devices()?.iter() {
-        let descriptor = device.device_descriptor()?;
-
-        if descriptor.class_code() != LIBUSB_CLASS_PER_INTERFACE {
-            log::trace!(
-                "Rejecting {:?}: wrong class {}",
-                device,
-                descriptor.class_code()
-            );
-            continue;
-        }
-
-        if descriptor.vendor_id() != FTDI_VID {
-            log::trace!(
-                "Rejecting {:?}: vendor id (0x{:x}) not FTDI id",
-                device,
-                descriptor.vendor_id()
-            );
-            continue;
-        }
-
-        if !KNOWN_PRODUCT_IDS.contains(&descriptor.product_id()) {
-            log::trace!(
-                "Rejecting {:?}: product id (0x{:x}) not known FTDI id",
-                device,
-                descriptor.product_id()
-            );
-            continue;
-        }
-
-        let dev_config = device
-            .active_config_descriptor()
-            .or(device.config_descriptor(0))?;
-
-        let Some(iface) = dev_config.interfaces().nth(ftdi_port) else {
-            log::trace!(
-                "Rejecting {:?}: too few interfaces: requested at index {}, available {}",
-                device,
-                ftdi_port,
-                dev_config.num_interfaces()
-            );
-            continue;
-        };
-
-        // FTDI has only one descriptor
-        let iface_desc = iface.descriptors().next().unwrap();
-        let mut output_ep = None;
-        let mut input_ep = None;
-        for ep in iface_desc.endpoint_descriptors() {
-            match (ep.transfer_type(), ep.direction()) {
-                (rusb::TransferType::Bulk, rusb::Direction::In) => {
-                    if input_ep.is_none() {
-                        input_ep = Some(ep)
-                    } else {
-                        log::warn!("Unsupported FTDI device: too many input endpoints");
-                        continue;
-                    }
-                }
-                (rusb::TransferType::Bulk, rusb::Direction::Out) => {
-                    if output_ep.is_none() {
-                        output_ep = Some(ep);
-                    } else {
-                        log::warn!("Unsupported FTDI device: too many output endpoints");
-                        continue;
-                    }
-                }
-                _ => {}
+        let (bus, address) = (device.bus_number(), device.address());
+        match check_device(device, ftdi_port, timeout) {
+            Ok(Some(device)) => available_devices.push(device),
+            Ok(None) => {}
+            Err(e) => {
+                log::warn!("Skipping USB device (bus {bus:03} device {address:03}): {e}");
             }
         }
-
-        let Some(output_ep) = output_ep else {
-            log::warn!("Unsupported FTDI device: no output endpoints");
-            continue;
-        };
-        let Some(input_ep) = input_ep else {
-            log::warn!("Unsupported FTDI device: no input endpoints");
-            continue;
-        };
-
-        let handle = device.open()?;
-
-        let manufacturer = if let Some(idx) = descriptor.manufacturer_string_index() {
-            Some(handle.read_string_descriptor_ascii(idx)?)
-        } else {
-            None
-        };
-        let product = if let Some(idx) = descriptor.product_string_index() {
-            Some(handle.read_string_descriptor_ascii(idx)?)
-        } else {
-            None
-        };
-        let serial_number = if let Some(idx) = descriptor.serial_number_string_index() {
-            Some(handle.read_string_descriptor_ascii(idx)?)
-        } else {
-            None
-        };
-
-        let info = DeviceInfo {
-            manufacturer,
-            product,
-            serial: serial_number,
-            product_id: descriptor.product_id(),
-            bus_number: device.bus_number(),
-            address: device.address(),
-        };
-
-        available_devices.push(FtdiJtagDevice::new(
-            handle,
-            info,
-            iface.number(),
-            BulkEndpoint {
-                address: output_ep.address(),
-                request_size: output_ep.max_packet_size(),
-            },
-            BulkEndpoint {
-                address: input_ep.address(),
-                request_size: input_ep.max_packet_size(),
-            },
-            timeout,
-        ));
     }
 
     Ok(available_devices)

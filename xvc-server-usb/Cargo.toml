@@ -1,5 +1,5 @@
 [package]
-name = "xvc-server-ftdi"
+name = "xvc-server-usb"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true

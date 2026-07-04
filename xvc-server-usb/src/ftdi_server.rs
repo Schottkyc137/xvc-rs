@@ -36,24 +36,24 @@ impl FtdiServer {
 }
 
 impl XvcServer for FtdiServer {
-    fn set_tck(&self, period_ns: u32) -> u32 {
+    type Err = rusb::Error;
+
+    fn set_tck(&self, period_ns: u32) -> Result<u32, Self::Err> {
         if period_ns == 0 {
             log::error!("set tck to zero");
-            return period_ns;
+            return Ok(period_ns);
         }
         let freq = 1_000_000_000 / period_ns;
-        match self.set_clock_speed(freq) {
-            Ok(actual) => 1_000_000_000 / actual,
-            Err(e) => {
-                log::error!("cannot set tck: {e}");
-                period_ns
-            }
-        }
+        self.set_clock_speed(freq).map(|f| 1_000_000_000 / f)
     }
 
-    fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8], tdo: &mut [u8]) {
-        if let Err(e) = self.device.shift_chunks(num_bits, tdi, tms, tdo) {
-            log::error!("cannot shift: {e}");
-        }
+    fn shift(
+        &self,
+        num_bits: u32,
+        tms: &[u8],
+        tdi: &[u8],
+        tdo: &mut [u8],
+    ) -> Result<(), Self::Err> {
+        self.device.shift_chunks(num_bits, tdi, tms, tdo)
     }
 }

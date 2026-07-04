@@ -20,5 +20,5 @@ ftdi-mpsse = "0.1.2"
 inquire = "0.9.4"
 
 [[bin]]
-name = "xvc-ftdi"
+name = "xvc-usb"
 path = "src/main.rs"

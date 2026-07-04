@@ -538,7 +538,7 @@ impl<H: UsbHandle> FtdiJtagDevice<H> {
             /*
              * Shift
              */
-            self.write(builder.as_slice())?;
+            self.write(builder.send_immediate().as_slice())?;
             let mut rx_buf = vec![0u8; rx_bytes_wanted as usize];
             self.read(&mut rx_buf)?;
 
@@ -661,7 +661,7 @@ mod test {
 
         let sent = dev.handle.received.borrow();
         assert_eq!(sent.len(), 1, "expected a single chunk");
-        assert_eq!(sent[0], [0x6B, 0x00, 0x80]);
+        assert_eq!(sent[0], [0x6B, 0x00, 0x80, 0x87]);
     }
 
     #[test]
@@ -671,7 +671,7 @@ mod test {
         dev.shift_chunks(3, &[0x00], &[0x05], &mut tdo).unwrap();
 
         let sent = dev.handle.received.borrow();
-        assert_eq!(sent[0], [0x6B, 0x02, 0x0D]);
+        assert_eq!(sent[0], [0x6B, 0x02, 0x0D, 0x87]);
     }
 
     #[test]
@@ -681,7 +681,7 @@ mod test {
         dev.shift_chunks(4, &[0x0A], &[0x00], &mut tdo).unwrap();
 
         let sent = dev.handle.received.borrow();
-        assert_eq!(sent[0], [0x6B, 0x00, 0x00, 0x3B, 0x02, 0x05]);
+        assert_eq!(sent[0], [0x6B, 0x00, 0x00, 0x3B, 0x02, 0x05, 0x87]);
     }
 
     #[test]
@@ -692,7 +692,7 @@ mod test {
             .unwrap();
 
         let sent = dev.handle.received.borrow();
-        assert_eq!(sent[0], [0x6B, 0x00, 0x00, 0x39, 0x00, 0x00, 0xFF]);
+        assert_eq!(sent[0], [0x6B, 0x00, 0x00, 0x39, 0x00, 0x00, 0xFF, 0x87]);
     }
 
     #[test]

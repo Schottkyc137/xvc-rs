@@ -50,13 +50,16 @@
 //! }
 //!
 //! impl XvcServer for MyDriver {
-//!     fn set_tck(&self, period_ns: u32) -> u32 {
+//!     type Err = std::io::Error; // device-specific error
+//!
+//!     fn set_tck(&self, period_ns: u32) -> Result<u32, Self::Err> {
 //!         // Configure hardware TCK period
-//!         period_ns
+//!         Ok(period_ns)
 //!     }
 //!
-//!     fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8], tdo: &mut [u8]) {
+//!     fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8], tdo: &mut [u8]) -> Result<(), Self::Err> {
 //!         // Perform JTAG shifting and write the captured TDO data to `tdo`
+//!         Ok(())
 //!     }
 //! }
 //! ```

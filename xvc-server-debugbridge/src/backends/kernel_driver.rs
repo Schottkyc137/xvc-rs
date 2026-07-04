@@ -118,9 +118,15 @@ impl KernelDriverBackend {
     }
 
     /// Transfers JTAG data.
-    /// `num_bits / 8`, rounded up must be the same length as `tms` and `tdi`.
-    /// The returned result, if successful, will also be of that size.
-    pub fn shift_data(&self, num_bits: u32, tms: &[u8], tdi: &[u8]) -> io::Result<Box<[u8]>> {
+    /// `num_bits / 8`, rounded up must be the same length as `tms`, `tdi` and `tdo`.
+    /// On success, the captured TDO data is written to `tdo`.
+    pub fn shift_data(
+        &self,
+        num_bits: u32,
+        tms: &[u8],
+        tdi: &[u8],
+        tdo: &mut [u8],
+    ) -> io::Result<()> {
         let num_bytes = num_bits.div_ceil(8) as usize;
         if tms.len() != num_bytes {
             log::error!(
@@ -138,6 +144,14 @@ impl KernelDriverBackend {
             );
             return Err(io::Error::other("TDI has incorrect size"));
         }
+        if tdo.len() != num_bytes {
+            log::error!(
+                "TDO buffer size mismatch: expected {}, got {}",
+                num_bytes,
+                tdo.len()
+            );
+            return Err(io::Error::other("TDO has incorrect size"));
+        }
 
         log::debug!(
             "Kernel driver shift: num_bits={}, num_bytes={}",
@@ -147,13 +161,12 @@ impl KernelDriverBackend {
         log::trace!("Kernel driver shift TMS: {:02x?}", tms);
         log::trace!("Kernel driver shift TDI: {:02x?}", tdi);
 
-        let mut result = vec![0; num_bytes].into_boxed_slice();
         let mut xvc_ioc = XvcIoc {
             opcode: 1,
             length: num_bits as c_uint,
             tms_buf: tms.as_ptr(),
             tdi_buf: tdi.as_ptr(),
-            tdo_buf: result.as_mut_ptr(),
+            tdo_buf: tdo.as_mut_ptr(),
         };
         // SAFETY: The ioctl call is safe because:
         // - File descriptor is valid (self.file is open)
@@ -163,8 +176,7 @@ impl KernelDriverBackend {
             xvc_do_ioc(self.file.as_raw_fd(), &mut xvc_ioc)?;
         }
 
-        log::trace!("Kernel driver shift result TDO: {:02x?}", &result[..]);
-        Ok(result)
+        Ok(())
     }
 }
 
@@ -174,14 +186,10 @@ impl XvcServer for KernelDriverBackend {
         period_ns
     }
 
-    fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8]) -> Box<[u8]> {
-        match self.shift_data(num_bits, tms, tdi) {
-            Ok(result) => result,
-            Err(e) => {
-                log::error!("Kernel driver shift error: {}", e);
-                // The server supports no error handling, so we push an empty array.
-                Box::default()
-            }
+    fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8], tdo: &mut [u8]) {
+        // The protocol supports no error handling, so `tdo` is left zeroed on error.
+        if let Err(e) = self.shift_data(num_bits, tms, tdi, tdo) {
+            log::error!("Kernel driver shift error: {}", e);
         }
     }
 }

@@ -1,5 +1,5 @@
 use std::{
-    io,
+    io::{self, Cursor, Write},
     ptr::{read_volatile, write_volatile},
     time::{Duration, Instant},
 };
@@ -44,7 +44,8 @@ impl MemoryMappedBackend {
         num_bits: u32,
         mut tms: &[u8],
         mut tdi: &[u8],
-    ) -> io::Result<Box<[u8]>> {
+        tdo: &mut [u8],
+    ) -> io::Result<()> {
         let num_bytes = num_bits.div_ceil(8) as usize;
         if tms.len() != num_bytes {
             log::error!(
@@ -62,14 +63,22 @@ impl MemoryMappedBackend {
             );
             return Err(io::Error::other("TDI has incorrect size"));
         }
+        if tdo.len() != num_bytes {
+            log::error!(
+                "TDO buffer size mismatch: expected {}, got {}",
+                num_bytes,
+                tdo.len()
+            );
+            return Err(io::Error::other("TDO has incorrect size"));
+        }
 
         log::debug!("UIO shift: num_bits={}, num_bytes={}", num_bits, num_bytes);
         log::trace!("UIO shift TMS: {:02x?}", tms);
         log::trace!("UIO shift TDI: {:02x?}", tdi);
 
-        let mut result = Vec::with_capacity(num_bytes);
         let mut bits_left = num_bits;
         let mut iteration = 0u32;
+        let mut tdo = Cursor::new(tdo);
 
         while !tms.is_empty() {
             let shift_num_bits = if tms.len() <= 4 { bits_left } else { 32 };
@@ -83,7 +92,7 @@ impl MemoryMappedBackend {
                 shift_num_bits
             );
 
-            let tdo = unsafe {
+            let read = unsafe {
                 write_volatile(self.mem.add(LENGTH_OFFSET), shift_num_bits);
                 write_volatile(
                     self.mem.add(TMS_REG_OFFSET),
@@ -116,10 +125,10 @@ impl MemoryMappedBackend {
             log::trace!(
                 "UIO shift iteration {} result: tdo: {:02x?}",
                 iteration,
-                tdo
+                read
             );
 
-            result.extend_from_slice(tdo);
+            tdo.write_all(read)?;
 
             tms = &tms[shift_num_bytes as usize..];
             tdi = &tdi[shift_num_bytes as usize..];
@@ -128,7 +137,6 @@ impl MemoryMappedBackend {
             iteration += 1;
         }
 
-        log::trace!("UIO shift result TDO: {:02x?}", &result[..]);
-        Ok(result.into_boxed_slice())
+        Ok(())
     }
 }

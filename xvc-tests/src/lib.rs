@@ -15,9 +15,7 @@ impl XvcServer for StubBackend {
         period_ns
     }
 
-    fn shift(&self, _num_bits: u32, tms: &[u8], _tdi: &[u8]) -> Box<[u8]> {
-        vec![0u8; tms.len()].into_boxed_slice()
-    }
+    fn shift(&self, _num_bits: u32, _tms: &[u8], _tdi: &[u8], _tdo: &mut [u8]) {}
 }
 
 /// Bind to an OS-assigned port, start the server in the background, and return

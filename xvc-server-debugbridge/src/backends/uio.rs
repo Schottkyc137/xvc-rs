@@ -68,14 +68,10 @@ impl XvcServer for UioDriverBackend {
         period_ns
     }
 
-    fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8]) -> Box<[u8]> {
-        match self.0.shift_data(num_bits, tms, tdi) {
-            Ok(result) => result,
-            Err(e) => {
-                log::error!("UIO shift error: {}", e);
-                // The protocol supports no error handling, so we push an empty array.
-                Box::default()
-            }
+    fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8], tdo: &mut [u8]) {
+        // The protocol supports no error handling, so `tdo` is left zeroed on error.
+        if let Err(e) = self.0.shift_data(num_bits, tms, tdi, tdo) {
+            log::error!("UIO shift error: {}", e);
         }
     }
 }

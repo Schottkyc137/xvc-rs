@@ -51,14 +51,9 @@ impl XvcServer for FtdiServer {
         }
     }
 
-    fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8]) -> Box<[u8]> {
-        let mut tdo = vec![0u8; tms.len()];
-        match self.device.shift_chunks(num_bits, tdi, tms, &mut tdo) {
-            Ok(()) => {}
-            Err(e) => {
-                log::error!("cannot shift: {e}");
-            }
-        };
-        tdo.into_boxed_slice()
+    fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8], tdo: &mut [u8]) {
+        if let Err(e) = self.device.shift_chunks(num_bits, tdi, tms, tdo) {
+            log::error!("cannot shift: {e}");
+        }
     }
 }

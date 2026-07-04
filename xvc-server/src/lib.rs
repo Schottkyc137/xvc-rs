@@ -55,9 +55,8 @@
 //!         period_ns
 //!     }
 //!
-//!     fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8]) -> Box<[u8]> {
-//!         // Perform JTAG shifting and return TDO data
-//!         Box::default()
+//!     fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8], tdo: &mut [u8]) {
+//!         // Perform JTAG shifting and write the captured TDO data to `tdo`
 //!     }
 //! }
 //! ```
@@ -79,8 +78,6 @@
 //! ## Error Handling
 //!
 //! The XVC 1.0 protocol specification does not support error reporting in the Shift operation.
-//! If a shift operation fails, an empty result is returned to the client.
-//! For other operations, standard I/O errors are propagated as appropriate.
 //!
 //! ## Configuration
 //!
@@ -137,29 +134,26 @@ pub trait XvcServer {
     /// the requested value if the hardware has limited frequency resolution.
     fn set_tck(&self, period_ns: u32) -> u32;
 
-    /// Shift JTAG TMS and TDI vectors into the device and return TDO data.
+    /// Shift JTAG TMS and TDI vectors into the device and capture TDO data.
     ///
     /// Performs a JTAG shift operation by:
     /// 1. Shifting `tms` and `tdi` data into the JTAG chain
-    /// 2. Capturing the corresponding `tdo` (Test Data Out) data
-    /// 3. Returning the captured `tdo` data
+    /// 2. Capturing and the corresponding TDO data to `tdo`
     ///
     /// The operation is atomic with respect to the JTAG state machine.
     ///
     /// # Arguments
     ///
     /// * `num_bits` - Number of TCK cycles to perform
-    /// * `tms` - Test Mode Select vector (must be ⌈num_bits / 8⌉ bytes)
-    /// * `tdi` - Test Data In vector (must be ⌈num_bits / 8⌉ bytes)
-    ///
-    /// # Returns
-    ///
-    /// Test Data Out vector of the same size as `tms` and `tdi`. On error,
-    /// an empty vector should be returned.
+    /// * `tms` - Test Mode Select vector (⌈num_bits / 8⌉ bytes)
+    /// * `tdi` - Test Data In vector (⌈num_bits / 8⌉ bytes)
+    /// * `tdo` - Output buffer for the Test Data Out vector. The caller passes
+    ///   a buffer of ⌈num_bits / 8⌉ bytes; implementations must fill it completely
+    ///   with the captured TDO data.
     ///
     /// # Error Handling
     ///
     /// The XVC 1.0 protocol does not support error reporting for shift operations.
-    /// Implementations should return an empty box on error rather than propagating errors.
-    fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8]) -> Box<[u8]>;
+    /// On error, implementations should leave `tdo` as -is.
+    fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8], tdo: &mut [u8]);
 }

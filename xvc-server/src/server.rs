@@ -259,9 +259,9 @@ fn compute_response<T: XvcServer>(
             );
             log::trace!("Shift TMS data: {:02x?}", &tms[..]);
             log::trace!("Shift TDI data: {:02x?}", &tdi[..]);
-            let tdo = server.shift(num_bits, &tms, &tdi);
-            log::trace!("Shift result TDO data: {:02x?}", &tdo[..]);
-            buf.extend_from_slice(&tdo);
+            buf = vec![0; tdi.len()];
+            server.shift(num_bits, &tms, &tdi, &mut buf);
+            log::trace!("Shift result TDO data: {:02x?}", &buf[..]);
         }
     }
     Ok(buf)

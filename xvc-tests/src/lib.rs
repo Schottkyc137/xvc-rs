@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{convert::Infallible, net::SocketAddr};
 
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -11,11 +11,21 @@ use xvc_server::{
 pub struct StubBackend;
 
 impl XvcServer for StubBackend {
-    fn set_tck(&self, period_ns: u32) -> u32 {
-        period_ns
+    type Err = Infallible;
+
+    fn set_tck(&self, period_ns: u32) -> Result<u32, Infallible> {
+        Ok(period_ns)
     }
 
-    fn shift(&self, _num_bits: u32, _tms: &[u8], _tdi: &[u8], _tdo: &mut [u8]) {}
+    fn shift(
+        &self,
+        _num_bits: u32,
+        _tms: &[u8],
+        _tdi: &[u8],
+        _tdo: &mut [u8],
+    ) -> Result<(), Infallible> {
+        Ok(())
+    }
 }
 
 /// Bind to an OS-assigned port, start the server in the background, and return

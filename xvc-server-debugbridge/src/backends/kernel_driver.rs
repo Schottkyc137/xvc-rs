@@ -181,15 +181,19 @@ impl KernelDriverBackend {
 }
 
 impl XvcServer for KernelDriverBackend {
-    fn set_tck(&self, period_ns: u32) -> u32 {
-        log::debug!("Kernel driver set_tck: period_ns={}", period_ns);
-        period_ns
+    type Err = io::Error;
+
+    fn set_tck(&self, period_ns: u32) -> Result<u32, Self::Err> {
+        Ok(period_ns)
     }
 
-    fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8], tdo: &mut [u8]) {
-        // The protocol supports no error handling, so `tdo` is left zeroed on error.
-        if let Err(e) = self.shift_data(num_bits, tms, tdi, tdo) {
-            log::error!("Kernel driver shift error: {}", e);
-        }
+    fn shift(
+        &self,
+        num_bits: u32,
+        tms: &[u8],
+        tdi: &[u8],
+        tdo: &mut [u8],
+    ) -> Result<(), Self::Err> {
+        self.shift_data(num_bits, tms, tdi, tdo)
     }
 }

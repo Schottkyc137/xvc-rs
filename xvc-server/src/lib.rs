@@ -50,13 +50,16 @@
 //! }
 //!
 //! impl XvcServer for MyDriver {
-//!     fn set_tck(&self, period_ns: u32) -> u32 {
+//!     type Err = std::io::Error; // device-specific error
+//!
+//!     fn set_tck(&self, period_ns: u32) -> Result<u32, Self::Err> {
 //!         // Configure hardware TCK period
-//!         period_ns
+//!         Ok(period_ns)
 //!     }
 //!
-//!     fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8], tdo: &mut [u8]) {
+//!     fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8], tdo: &mut [u8]) -> Result<(), Self::Err> {
 //!         // Perform JTAG shifting and write the captured TDO data to `tdo`
+//!         Ok(())
 //!     }
 //! }
 //! ```
@@ -118,6 +121,7 @@ pub mod server;
 ///
 /// See the [`xvc-server-debugbridge`](https://docs.rs/xvc-server-debugbridge/) crate for examples.
 pub trait XvcServer {
+    type Err: std::error::Error;
     /// Set the TCK (Test Clock) period.
     ///
     /// Configures the frequency of the JTAG Test Clock (TCK). The server attempts to set
@@ -132,7 +136,13 @@ pub trait XvcServer {
     ///
     /// The actual TCK period set by the hardware (in nanoseconds). This may differ from
     /// the requested value if the hardware has limited frequency resolution.
-    fn set_tck(&self, period_ns: u32) -> u32;
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Self::Err`] if the period cannot be configured. The XVC 1.0 protocol has
+    /// no error channel, so the server logs the error and echoes the requested period back
+    /// to the client to keep the reply framing intact.
+    fn set_tck(&self, period_ns: u32) -> Result<u32, Self::Err>;
 
     /// Shift JTAG TMS and TDI vectors into the device and capture TDO data.
     ///
@@ -151,9 +161,12 @@ pub trait XvcServer {
     ///   a buffer of ⌈num_bits / 8⌉ bytes; implementations must fill it completely
     ///   with the captured TDO data.
     ///
-    /// # Error Handling
+    /// # Errors
     ///
-    /// The XVC 1.0 protocol does not support error reporting for shift operations.
-    /// On error, implementations should leave `tdo` as -is.
-    fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8], tdo: &mut [u8]);
+    /// Returns [`Self::Err`] if the hardware shift fails. The XVC 1.0 protocol has no
+    /// error channel, so the server cannot report the failure to the client: it logs
+    /// the error and sends the current contents of `tdo` (zeroed by the caller) as the
+    /// TDO response. Implementations should leave `tdo` as-is on error.
+    fn shift(&self, num_bits: u32, tms: &[u8], tdi: &[u8], tdo: &mut [u8])
+    -> Result<(), Self::Err>;
 }

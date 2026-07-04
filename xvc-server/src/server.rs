@@ -246,9 +246,16 @@ fn compute_response<T: XvcServer>(
         }
         Message::SetTck { period_ns } => {
             log::debug!("Received SetTck message: period_ns={}", period_ns);
-            let ret_period = server.set_tck(period_ns);
-            log::debug!("Set TCK returned: period_ns={}", ret_period);
-            buf.extend_from_slice(&ret_period.to_le_bytes());
+            match server.set_tck(period_ns) {
+                Ok(ret_period) => {
+                    log::debug!("Set TCK returned: period_ns={}", ret_period);
+                    buf.extend_from_slice(&ret_period.to_le_bytes());
+                }
+                Err(e) => {
+                    log::error!("Set TCK error: {e}");
+                    buf.extend_from_slice(&period_ns.to_le_bytes());
+                }
+            }
         }
         Message::Shift { num_bits, tms, tdi } => {
             log::debug!(
@@ -260,8 +267,14 @@ fn compute_response<T: XvcServer>(
             log::trace!("Shift TMS data: {:02x?}", &tms[..]);
             log::trace!("Shift TDI data: {:02x?}", &tdi[..]);
             buf = vec![0; tdi.len()];
-            server.shift(num_bits, &tms, &tdi, &mut buf);
-            log::trace!("Shift result TDO data: {:02x?}", &buf[..]);
+            match server.shift(num_bits, &tms, &tdi, &mut buf) {
+                Ok(()) => {
+                    log::trace!("Shift result TDO data: {:02x?}", &buf[..]);
+                }
+                Err(e) => {
+                    log::error!("Shift error: {e}");
+                }
+            }
         }
     }
     Ok(buf)

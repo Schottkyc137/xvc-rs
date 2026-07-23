@@ -1,48 +1,24 @@
-# XVC Server
+# xvc-server
 
-A Rust library for implementing Xilinx Virtual Cable (XVC) servers that handle JTAG communication with FPGA devices over network connections.
+Library for building [Xilinx Virtual Cable (XVC) 1.0](https://github.com/Xilinx/XilinxVirtualCable) servers.
+It handles the protocol, TCP connections, and client management; library users implement the `XvcServer` trait to drive specific JTAG hardware.
 
-## Features
+This crate is part of the [`xvc-rs`](https://github.com/Schottkyc137/xvc-rs) workspace and is the extension point for new hardware backends.
+For ready-to-run servers, see [`xvc-server-debugbridge`](https://crates.io/crates/xvc-server-debugbridge) (Linux debug bridges) and [`xvc-server-usb`](https://crates.io/crates/xvc-server-usb) (FTDI USB-to-JTAG adapters).
 
-- **Protocol Implementation**: Full XVC 1.0 support for remote JTAG operations
-- **Pluggable Backends**: Trait-based architecture for different hardware drivers
+## Installation
 
-## Quick Start
-
-### Minimal Example
-
-```rust
-use xvc_server::{XvcServer, server::{Server, Config}};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
-// Implement the trait for your hardware
-struct MyDriver;
-
-impl XvcServer for MyDriver {
-    fn set_tck(&self, period_ns: u32) -> u32 {
-        period_ns
-    }
-
-    fn shift(&self, _num_bits: u32, _tms: Box<[u8]>, tdi: Box<[u8]>) -> Box<[u8]> {
-        tdi
-    }
-}
-
-// Create and run the server
-let driver = MyDriver;
-let config = Config::default();
-let server = Server::new(driver, config);
-
-let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 2542);
-server.listen(addr)?;
+```sh
+cargo add xvc-server
 ```
 
-## Usage
+The server is async and requires a multi-threaded [Tokio](https://tokio.rs) runtime.
 
-See the [crate documentation](https://docs.rs/xvc-server/) for detailed documentation.
+## Example
 
-## See Also
+A minimal loopback server is in [`examples/mock_server.rs`](https://github.com/Schottkyc137/xvc-rs/blob/main/xvc-server/examples/mock_server.rs).
+Start it, then point any XVC client at it:
 
-- [xvc-protocol](../xvc-protocol/) - Protocol encoding/decoding
-- [xvc-server-debugbridge](../xvc-server-debugbridge/) - Linux-specific driver implementations
-- [Xilinx Virtual Cable](https://github.com/Xilinx/XilinxVirtualCable) - Official XVC specification
+```sh
+cargo run --example mock_server
+```

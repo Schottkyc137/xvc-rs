@@ -1,35 +1,24 @@
-# XVC Client
+# xvc-client
 
-A Rust client library for connecting to Xilinx Virtual Cable (XVC) servers and performing remote JTAG operations.
+Async Rust client for [Xilinx Virtual Cable (XVC) 1.0](https://github.com/Xilinx/XilinxVirtualCable) servers.
+It opens a TCP connection to a remote JTAG target and drives it through the three XVC operations: `get_info`, `set_tck`, and `shift`.
 
-## Quick Start
+This crate is part of the [`xvc-rs`](https://github.com/Schottkyc137/xvc-rs) workspace.
+It is typically used to script or automate JTAG operations against a running XVC server, or to stand in for Vivado (normally the client) in tests.
 
-### Basic Connection and Operation
+## Installation
 
-```rust
-use xvc_client::XvcClient;
-
-let mut client = XvcClient::new("127.0.0.1:2542")?;
-
-// Query server capabilities
-let info = client.get_info()?;
-println!("Server version: {}", info.version());
-
-// Set clock frequency
-let actual_period = client.set_tck(10)?; // 10 ns
-
-// Perform JTAG shift
-let tdo = client.shift(8, vec![0x00], vec![0xA5])?;
-println!("Received: {:?}", tdo);
+```sh
+cargo add xvc-client
 ```
 
-## Usage
+The client is async and runs on a [Tokio](https://tokio.rs) runtime.
 
-See the [crate documentation](https://docs.rs/xvc-client/) for API documentation and usage examples.
+## Example
 
-## See Also
+A runnable client is in [`examples/sample_client.rs`](https://github.com/Schottkyc137/xvc-rs/blob/main/xvc-client/examples/sample_client.rs).
+Point it at any XVC server:
 
-- [xvc-server](../xvc-server/) - Server implementation
-- [xvc-server-debugbridge](../xvc-server-debugbridge/) - Linux-specific drivers
-- [xvc-protocol](../xvc-protocol/) - Protocol encoding/decoding
-- [Xilinx Virtual Cable](https://github.com/Xilinx/XilinxVirtualCable) - Official XVC specification
+```sh
+cargo run --example sample_client -- 127.0.0.1:2542
+```

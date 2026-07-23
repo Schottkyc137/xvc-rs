@@ -29,8 +29,7 @@ protocol, shipped as both libraries and ready-to-run binaries:
 
 - **Client**: The sending side of the protocol. Mainly useful for testing or for standing in where a tool like Vivado would normally be.
 - **Server**: The listening side. AMD Vivado® or AMD Vitis® typically act as the client, and the server translates incoming calls into the target's JTAG operations.
-- **Library**: Crates you depend on via cargo to build custom XVC clients or servers.
-  <!-- TODO: add runnable examples and link them here, e.g. a client in `xvc-client/examples/sample_client.rs` and a mock server in `xvc-server/examples/mock_server.rs`. -->
+- **Library**: Crates you depend on via cargo to build custom XVC clients or servers. See the runnable [client](./xvc-client/examples/sample_client.rs) and [server](./xvc-server/examples/mock_server.rs) examples.
 - **Binary**: Ready-to-use XVC server executables that need no additional code.
 
 See the READMEs in the respective crates in this repository for more information:
@@ -38,9 +37,8 @@ See the READMEs in the respective crates in this repository for more information
 - [xvc-client](./xvc-client/README.md)
 - [xvc-protocol](./xvc-protocol/README.md)
 - [xvc-server](./xvc-server/README.md)
-- [xvc-server-debugbridge](./xvc-server-debugbridge/)
+- [xvc-server-debugbridge](./xvc-server-debugbridge/README.md)
 - [xvc-server-usb](./xvc-server-usb/README.md)
-- [xvc-tests](./xvc-tests/README.md)
 
 ## Quick Start
 

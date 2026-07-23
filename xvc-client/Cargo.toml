@@ -14,3 +14,6 @@ bytes = "1"
 tokio = { version = "1", features = ["net", "io-util"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 xvc-protocol = { version = "0.2.0", path = "../xvc-protocol", features = ["tokio"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -1,30 +1,20 @@
-# XVC Protocol Library
+# xvc-protocol
 
-A Rust implementation of the [Xilinx Virtual Cable (XVC) 1.0 protocol](https://github.com/Xilinx/XilinxVirtualCable) for JTAG communication with FPGA devices over network connections.
+Core implementation of the [Xilinx Virtual Cable (XVC) 1.0](https://github.com/Xilinx/XilinxVirtualCable) wire format: the message types and codec implementation that serializes and deserializes them.
 
-## Features
+This crate is the foundation of the [`xvc-rs`](https://github.com/Schottkyc137/xvc-rs) workspace; all other crates build on it directly or indirectly.
+Depend on it directly only when writing a custom client, server, or tooling that speaks XVC — otherwise reach for the higher-level [`xvc-server`](https://crates.io/crates/xvc-server) or [`xvc-client`](https://crates.io/crates/xvc-client) instead.
 
-- **Protocol Implementation**: Full XVC 1.0 support with message serialization/deserialization
-- **Error Handling**: Robust parsing with detailed error reporting
-- **Type Safety**: Leverages Rust's type system for protocol correctness
+## Installation
 
-## Usage
+```sh
+cargo add xvc-protocol
+```
 
-See the [crate documentation](https://docs.rs/xvc-protocol/) for API documentation and usage examples.
+### Tokio support
 
-### Quick Start
+Enable the `tokio` feature for async codecs built on [`tokio-util`](https://docs.rs/tokio-util):
 
-```rust
-use xvc_protocol::{Message, XvcInfo};
-use std::io::Cursor;
-
-// Parse server capabilities
-let response = b"xvcServer_v1.0:32\n";
-let mut reader = Cursor::new(response);
-let info = XvcInfo::from_reader(&mut reader)?;
-
-// Send a message
-let msg = Message::GetInfo;
-let mut buffer = Vec::new();
-msg.write_to(&mut buffer)?;
+```sh
+cargo add xvc-protocol --features tokio
 ```

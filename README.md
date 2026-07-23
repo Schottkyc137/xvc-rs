@@ -2,159 +2,103 @@
 
 A Rust implementation of the [Xilinx Virtual Cable (XVC) 1.0 protocol](https://github.com/Xilinx/XilinxVirtualCable) for remote JTAG communication with FPGA devices over network connections.
 
+## What is the Xilinx Virtual Cable (XVC) protocol?
+
+![Comparison of debugging a target with a directly attached JTAG cable versus over the network with XVC](./doc/xvc_vs_no_xvc.drawio.svg)
+
+Debugging, programming, or interacting with a target (FPGA, SoC, ...) normally
+requires a physical JTAG cable connected to the same machine as your tools.
+
+XVC tunnels JTAG over a TCP/IP connection instead. Tools like Vivado connect to
+a target elsewhere on the network as if the cable were attached locally, so the
+host doesn't need physical access to the target or dedicated debug hardware.
+
 ## Disclaimer
 
 This project is an independent implementation of an XVC server. Xilinx® is a registered trademark of AMD. This project is not affiliated with, endorsed by, or supported by AMD or Xilinx.
 
 ## Project Overview
 
-xvc-rs is a modular, multi-crate Rust project providing both client and server implementations of the XVC protocol. It enables remote access to FPGA JTAG interfaces over network connections with multiple backend driver options.
+`xvc-rs` is a modular, multi-crate Rust project covering both sides of the XVC
+protocol, shipped as both libraries and ready-to-run binaries:
 
-## Crates
+| | Library | Binary |
+|-| ------- | ------ |
+| **Client** | `xvc-client`, `xvc-protocol` | - |
+| **Server** | `xvc-protocol`, `xvc-server` | `xvc-server-debugbridge`, `xvc-server-usb` |
 
-### [xvc-protocol](./xvc-protocol/)
+- **Client**: The sending side of the protocol. Mainly useful for testing or for standing in where a tool like Vivado would normally be.
+- **Server**: The listening side. AMD Vivado® or AMD Vitis® typically act as the client, and the server translates incoming calls into the target's JTAG operations.
+- **Library**: Crates you depend on via cargo to build custom XVC clients or servers. See the runnable [client](./xvc-client/examples/sample_client.rs) and [server](./xvc-server/examples/mock_server.rs) examples.
+- **Binary**: Ready-to-use XVC server executables that need no additional code.
 
-The core protocol library implementing XVC 1.0 message serialization and deserialization.
+See the READMEs in the respective crates in this repository for more information:
 
-- **Purpose**: Protocol definition and encoding/decoding for XVC messages
-- **Key Features**: Full XVC 1.0 support with robust error handling and type-safe message handling
-
-See [xvc-protocol README](./xvc-protocol/README.md) for detailed documentation.
-
-### [xvc-client](./xvc-client/)
-
-A client library for connecting to XVC servers and performing remote JTAG operations.
-
-- **Purpose**: Provides a high-level API for clients to communicate with XVC servers
-- **Key Features**: Simplified connection management and JTAG operation abstraction
-
-See [xvc-client README](./xvc-client/README.md) for usage examples and API documentation.
-
-### [xvc-server](./xvc-server/)
-
-Core server library with pluggable backend architecture for JTAG hardware drivers.
-
-- **Purpose**: Server-side protocol implementation with trait-based driver abstraction
-- **Key Features**: Trait-based architecture for different hardware backends
-
-See [xvc-server README](./xvc-server/README.md) for implementation details.
-
-### [xvc-server-debugbridge](./xvc-server-debugbridge/)
-
-Linux-specific backend implementations and ready-to-use command-line server binary.
-
-- **Purpose**: Provides Linux drivers and a standalone server executable
-- **Key Features**: Multiple driver backends (ioctl, UIO), command-line interface, logging support
-- **Backends**:
-  - **Ioctl Driver**: Kernel driver communication via ioctl syscalls
-  - **UIO Driver**: Userspace I/O for memory-mapped FPGA interfaces
-
-See [xvc-server-debugbridge README](./xvc-server-debugbridge/README.md) for command-line usage and environment configuration.
+- [xvc-client](./xvc-client/README.md)
+- [xvc-protocol](./xvc-protocol/README.md)
+- [xvc-server](./xvc-server/README.md)
+- [xvc-server-debugbridge](./xvc-server-debugbridge/README.md)
+- [xvc-server-usb](./xvc-server-usb/README.md)
 
 ## Quick Start
 
-### Client Usage
+Which server you run depends on how the target is reached.
 
-```rust
-use xvc_client::XvcClient;
+### Remote target via USB
 
-let mut client = XvcClient::new("127.0.0.1:2542")?;
-
-// Query server capabilities
-let info = client.get_info()?;
-println!("Server version: {}", info.version());
-
-// Set clock frequency
-let actual_period = client.set_tck(10)?;
-
-// Perform JTAG shift
-let tdo = client.shift(8, vec![0x00], vec![0xA5])?;
-println!("Received: {:?}", tdo);
-```
-
-### Server Usage
-
-```rust
-use xvc_server::{XvcServer, server::{Server, Config}};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
-// Implement the trait for your hardware
-struct MyDriver;
-
-impl XvcServer for MyDriver {
-    fn set_tck(&self, period_ns: u32) -> u32 { period_ns }
-    fn shift(&self, _num_bits: u32, _tms: Box<[u8]>, tdi: Box<[u8]>) -> Box<[u8]> { tdi }
-}
-
-// Create and run the server
-let driver = MyDriver;
-let server = Server::new(driver, Config::default());
-let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 2542);
-server.listen(addr)?;
-```
-
-### Command-line Server
-
-```bash
-# Start the server and let the tool choose the backend
-xvc-bridge --ip <IP>
-
-# Start with ioctl driver
-xvc-bridge kernel-driver
-
-# Start with UIO driver
-RUST_LOG=debug xvc-bridge uio-driver
-```
-
-## Project Structure
+The target sits in a controlled environment (e.g., a lab), and a nearby device such as a Raspberry Pi, ESP32, or spare laptop connects to it over USB.
+Your PC reaches that device over the network:
 
 ```
-xvc-rs/
-├── xvc-protocol/        # Core protocol implementation
-├── xvc-client/          # Client library
-├── xvc-server/          # Server library
-└── xvc-server-debugbridge/    # Linux-specific drivers and CLI
+┌─────────┐            ┌──────────────────────────┐         ┌────────┐
+│ Your PC │── TCP/IP ──│ Lab device (Raspberry Pi)│── USB ──│ Target │
+└─────────┘            └──────────────────────────┘         └────────┘
 ```
 
-## Building
+Download the `xvc-server-usb` binary (the executable is named `xvc-usb`) from
+the release page (TODO: add on release) and start it on the lab device:
 
-This is a Rust workspace project using Cargo. Build all crates with:
-
-```bash
-cargo build
+```shell
+xvc-usb
 ```
 
-Or build specific crates:
+For more information, read the [xvc-server-usb README](./xvc-server-usb/README.md).
 
-```bash
-cargo build -p xvc-protocol
-cargo build -p xvc-client
-cargo build -p xvc-server
-cargo build -p xvc-server-debugbridge
+### Target is an FPGA on a SoC
+
+The XVC server can run directly on a SoC (e.g., MPSoC, RFSoC, Versal) to debug the FPGA on the same device.
+With this flow the FPGA cannot be reconfigured — it is only suitable for ILA or VIO debugging:
+
+```
+┌─────────┐            ┌───────────┐                   ┌────────────┐
+│ Your PC │── TCP/IP ──│ SoC (CPU) │── memory-mapped ──│ SoC (FPGA) │
+└─────────┘            └───────────┘                   └────────────┘
 ```
 
-## Cross compiling
+Download the `xvc-server-debugbridge` binary (the executable is named `xvc-bridge`) from the release page (TODO: add on release) and start it on the SoC:
 
-Cross compilation is recommended through the usage of the [cross](https://github.com/cross-rs/cross) crate.
-To build, simply use
-
-```bash
-cross build --target <target>
+```shell
+xvc-bridge
 ```
 
-For example, to compile to a Zynqmp, use
-```bash
-cross build --target aarch64-unknown-linux-gnu
+This requires the [Xilinx Debug Bridge](https://docs.amd.com/v/u/en-US/pg245-debug-bridge) (or a similar solution) to be instantiated on the target FPGA.
+Depending on how that is set up, `xvc-server-debugbridge` offers several modes of operation:
+the dedicated [kernel driver](https://github.com/Xilinx/XilinxVirtualCable/tree/master/jtag/zynqMP/src/driver), a generic UIO driver, or a raw memory-mapped address.
+
+### Connecting from Vivado
+
+Once a server is running, point Vivado's Hardware Manager at it:
+
+1. Open the **Hardware Manager** and choose **Open Target → Open New Target**.
+2. On the **Hardware Server Settings** page, select **Local server** and click **Add Xilinx Virtual Cable (XVC)**.
+3. Enter the host running the server and port `2542`, then finish the wizard.
+
+The target then appears like a locally attached cable. The same connection can be made from the Tcl console:
+
+```tcl
+open_hw_manager
+connect_hw_server
+open_hw_target -xvc_url <server-host>:2542
 ```
 
-## Documentation
-
-Generate and view documentation:
-
-```bash
-cargo doc --open
-```
-
-## Related Resources
-
-- [Official Xilinx Virtual Cable](https://github.com/Xilinx/XilinxVirtualCable) - XVC protocol specification
+Vitis uses the same XVC connection settings.

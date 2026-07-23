@@ -1,48 +1,54 @@
-# XVC Server for the AMD Debug Bridge
+# xvc-server-debugbridge
 
-Linux-specific backend implementations of the XVC (Xilinx Virtual Cable) server for [AMD Debug Bridges](https://www.amd.com/en/products/adaptive-socs-and-fpgas/intellectual-property/debug-bridge.html).
+Ready-to-run [Xilinx Virtual Cable (XVC) 1.0](https://github.com/Xilinx/XilinxVirtualCable) server for [AMD Debug Bridges](https://www.amd.com/en/products/adaptive-socs-and-fpgas/intellectual-property/debug-bridge.html) on Linux.
+It installs the `xvc-bridge` binary, which exposes a Debug Bridge instantiated in your FPGA design over TCP so tools like Vivado can reach it.
 
-## Features
+This crate is part of the [`xvc-rs`](https://github.com/Schottkyc137/xvc-rs) workspace and builds on [`xvc-server`](https://crates.io/crates/xvc-server).
 
-- **Command-line Binary**: Ready-to-use server executable
-- **Multiple Backends**:
-  - **Ioctl Driver**: Kernel driver communication via ioctl syscalls
-  - **UIO Driver**: Userspace I/O for memory-mapped FPGA interfaces
-  - **DevMem Driver**: Userspace I/O for raw memory-mapped access
+## Requirements
+
+- **Linux** — the backends use `/dev` device nodes and Linux syscalls (ioctl, UIO, mmap).
+- A [Debug Bridge](https://docs.amd.com/v/u/en-US/pg245-debug-bridge) (or an equivalent) instantiated on the target FPGA.
+- Permission to access the chosen device node — typically **root**:
+  `/dev/xilinx_xvc_driver`, `/dev/uioN`, or `/dev/mem`.
+
+## Installation
+
+```sh
+cargo install xvc-server-debugbridge
+```
+
+This installs the `xvc-bridge` binary. The server usually runs on the SoC's ARM core, so cross-compile for it with [`cross`](https://github.com/cross-rs/cross):
+
+```sh
+cross build --release -p xvc-server-debugbridge --target aarch64-unknown-linux-gnu
+```
 
 ## Usage
 
-This crate provides a command-line server binary:
+`xvc-bridge` picks a backend automatically, or you can select one explicitly:
 
-```bash
-# Automatically choose a driver
+```sh
+# Auto-detect the backend (kernel driver, then UIO)
 xvc-bridge
 
-# Start using the kernel driver
+# Xilinx kernel driver (path is optional; auto-detected if omitted)
 xvc-bridge kernel-driver /dev/xilinx_xvc_driver
 
-# Start using the UIO driver
+# UIO device
 xvc-bridge uio-driver /dev/uio0
 
-# Start using the DevMem driver
-xvc-bridge dev-mem-driver 0xAA000000
+# Raw /dev/mem at a physical address
+xvc-bridge dev-mem-driver 0xA0000000
 ```
 
-See `xvc-bridge --help` for all available options.
+The server binds to `0.0.0.0:2542` by default; override with `--ip` and `--port`.
+See `xvc-bridge --help` for all options.
 
-## Environment Variables
+## Logging
 
-- `RUST_LOG`: configure log levels (e.g., `RUST_LOG=debug`)
+Diagnostics go through [`env_logger`](https://docs.rs/env_logger/) (default level `info`). Control verbosity with `RUST_LOG`:
 
-### Example:
-
-```bash
-RUST_LOG=debug xvc-bridge --ip 192.168.99.217 uio-driver /dev/uio0
+```sh
+RUST_LOG=debug xvc-bridge uio-driver /dev/uio0
 ```
-
-## See Also
-
-- [xvc-server](../xvc-server/) - Core protocol implementation
-- [xvc-protocol](../xvc-protocol/) - Protocol encoding/decoding
-- [Xilinx Virtual Cable](https://github.com/Xilinx/XilinxVirtualCable) - Official XVC specification
-- [Debug Bridge in Vivado](https://docs.amd.com/r/en-US/ug908-vivado-programming-debugging/Debug-Bridge) - Debug Bridge documentation

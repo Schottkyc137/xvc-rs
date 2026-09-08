@@ -3,6 +3,17 @@ name: CI
 on: [push, pull_request]
 
 jobs:
+  conventional-commits:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check commit messages
+        uses: webiny/action-conventional-commits@v1.3.0
+
   build-and-test:
     runs-on: ubuntu-latest
 

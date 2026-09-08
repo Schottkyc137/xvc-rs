@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+readme = "README.md"
 categories = ["api-bindings"]
 description = "Library for connecting to Xilinx Virtual Cable (XVC) servers and performing remote JTAG operations"
 

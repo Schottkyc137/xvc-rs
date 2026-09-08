@@ -149,7 +149,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let Some(device_impl) = device_impl else {
         println!(
-            "No debug bridge could be auto detected. Use xvc-server kernel-driver <path>, xvc-server uio-driver <path>, or xvc-server dev-mem-driver <address> to manually specify a driver."
+            "No debug bridge could be auto detected. Use xvc-bridge kernel-driver <path>, xvc-bridge uio-driver <path>, or xvc-bridge dev-mem-driver <address> to manually specify a driver."
         );
         return Ok(());
     };
@@ -175,7 +175,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let device_path = match path.or_else(kernel_driver_path) {
                 None => {
                     println!(
-                        "No debug bridge could be detected. Explicitly specify a path using xvc-server kernel-driver <path> to manually specify a driver."
+                        "No debug bridge could be detected. Explicitly specify a path using xvc-bridge kernel-driver <path> to manually specify a driver."
                     );
                     return Ok(());
                 }
@@ -202,7 +202,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let uio_path = match path.or_else(uio_driver_path) {
                 None => {
                     println!(
-                        "No debug bridge could be detected. Explicitly specify a path using xvc-server uio-driver <path> to manually specify a driver."
+                        "No debug bridge could be detected. Explicitly specify a path using xvc-bridge uio-driver <path> to manually specify a driver."
                     );
                     return Ok(());
                 }

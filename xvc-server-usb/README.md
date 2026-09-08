@@ -1,15 +1,14 @@
 # xvc-server-usb
 
-[Xilinx Virtual Cable (XVC) 1.0](https://github.com/Xilinx/XilinxVirtualCable) server that talks to a target through an FTDI USB-to-JTAG bridge.
-It installs the `xvc-usb` binary, which exposes the JTAG chain over TCP so tools like Vivado can reach a board connected over USB.
+[Xilinx Virtual Cable (XVC) 1.0](https://github.com/Xilinx/XilinxVirtualCable) server that talks to a target through a USB-to-JTAG bridge.
+This crate provides the `xvc-usb` binary, which exposes the JTAG chain over TCP so tools like Vivado can reach a board connected over USB.
 
-This crate is part of the [`xvc-rs`](https://github.com/Schottkyc137/xvc-rs) workspace and builds on [`xvc-server`](https://crates.io/crates/xvc-server).
+This crate is part of the [`xvc-rs`](https://github.com/Schottkyc137/xvc-rs) project.
 
 ## Supported hardware
 
-FTDI FT232H / FT2232H / FT4232H USB-to-JTAG bridges — the chips found on most AMD/Xilinx and Digilent evaluation boards.
-
-<!-- TODO: confirm the exact list of tested chips and boards. -->
+Supported chips are from the FTDI family (currently: FT2232H, FT4232H, FT232H).
+These are the chips found on most AMD/Xilinx and Digilent evaluation boards.
 
 ## Requirements
 
@@ -17,8 +16,6 @@ FTDI FT232H / FT2232H / FT4232H USB-to-JTAG bridges — the chips found on most 
 - Permission to access the USB device (see [Permissions](#permissions)).
 
 libusb is built from source (via the `rusb` `vendored` feature), so no system libusb is required to build.
-
-<!-- TODO: confirm which operating systems are tested (Linux / macOS / Windows). -->
 
 ## Installation
 
@@ -45,19 +42,15 @@ xvc-usb --ftdi-port 1
 ```
 
 The server binds to `0.0.0.0:2542` by default; override with `--ip` and `--port`.
-When several matching devices are connected, `xvc-usb` prompts you to choose one — pass `--non-interactive` to fail instead of prompting.
+When several matching devices are connected, `xvc-usb` prompts you to choose one.
+Pass `--non-interactive` to fail instead of prompting.
 The `--loopback` flag runs the FTDI chip in loopback for testing without a target.
 See `xvc-usb --help` for all options.
 
 ## Permissions
 
-Accessing an FTDI device through libusb usually needs extra setup:
-
-- **Linux:** **TODO** — udev rule granting access to the FTDI VID/PID, and note
-  whether the `ftdi_sio` / `usbserial` kernel driver must be unbound first.
-- **macOS:** **TODO** — whether Apple's built-in FTDI driver must be unloaded.
-- **Windows:** **TODO** — WinUSB driver installation (e.g. via
-  [Zadig](https://zadig.akeo.ie/)).
+Accessing an FTDI device through libusb might needs extra steps.
+Refer to the [libusb FAQ](https://github.com/libusb/libusb/wiki/FAQ) for more.
 
 ## Logging
 

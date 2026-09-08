@@ -1,9 +1,10 @@
 # xvc-protocol
 
-Core implementation of the [Xilinx Virtual Cable (XVC) 1.0](https://github.com/Xilinx/XilinxVirtualCable) wire format: the message types and codec implementation that serializes and deserializes them.
+Core implementation of the [Xilinx Virtual Cable (XVC) 1.0](https://github.com/Xilinx/XilinxVirtualCable) wire format.
+This library contains message types and serialization / deserialization facilities.
 
-This crate is the foundation of the [`xvc-rs`](https://github.com/Schottkyc137/xvc-rs) workspace; all other crates build on it directly or indirectly.
-Depend on it directly only when writing a custom client, server, or tooling that speaks XVC — otherwise reach for the higher-level [`xvc-server`](https://crates.io/crates/xvc-server) or [`xvc-client`](https://crates.io/crates/xvc-client) instead.
+The crate is the foundation of the [`xvc-rs`](https://github.com/Schottkyc137/xvc-rs) project; all other crates build on it directly or indirectly.
+Unless there is a specific reason not to, authors of rust-based tooling for XVC should depend on the higher-level [`xvc-server`](https://crates.io/crates/xvc-server) or [`xvc-client`](https://crates.io/crates/xvc-client) crates.
 
 ## Installation
 
@@ -11,9 +12,11 @@ Depend on it directly only when writing a custom client, server, or tooling that
 cargo add xvc-protocol
 ```
 
-### Tokio support
+### Cargo features
 
-Enable the `tokio` feature for async codecs built on [`tokio-util`](https://docs.rs/tokio-util):
+**Tokio Support**
+
+The `tokio` feature enables async codecs built on [`tokio-util`](https://docs.rs/tokio-util) for integration with the [`tokio`](https://tokio.rs) framework:
 
 ```sh
 cargo add xvc-protocol --features tokio

@@ -6,6 +6,9 @@ authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+readme = "README.md"
+categories = ["command-line-utilities"]
+description = "Xilinx Virtual Cable (XVC) server that exposes a JTAG chain connected through a USB-to-JTAG bridge"
 
 [dependencies]
 log = "0.4.28"

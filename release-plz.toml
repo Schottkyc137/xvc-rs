@@ -1,0 +1,3 @@
+[workspace]
+git_tag_name = "{{ package }}/v{{ version }}"
+git_release_name = "{{ package }} {{ version }}"

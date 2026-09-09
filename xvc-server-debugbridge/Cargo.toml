@@ -10,6 +10,7 @@ readme = "README.md"
 categories = ["command-line-utilities", "hardware-support", "embedded"]
 keywords = ["jtag", "fpga", "xvc", "amd", "zynq"]
 homepage.workspace = true
+documentation = "https://github.com/Schottkyc137/xvc-rs/tree/main/xvc-server-debugbridge"
 description = "Backend implementations of the XVC (Xilinx Virtual Cable) server for AMD Debug Bridges"
 
 [dependencies]

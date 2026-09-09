@@ -10,6 +10,7 @@ readme = "README.md"
 categories = ["command-line-utilities", "hardware-support", "embedded"]
 keywords = ["jtag", "fpga", "xvc", "ftdi", "usb"]
 homepage.workspace = true
+documentation = "https://github.com/Schottkyc137/xvc-rs/tree/main/xvc-server-usb"
 description = "Xilinx Virtual Cable (XVC) server that exposes a JTAG chain connected through a USB-to-JTAG bridge"
 
 [dependencies]

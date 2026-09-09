@@ -1,6 +1,6 @@
 [package]
 name = "xvc-server-debugbridge"
-version = "0.2.1"
+version = "0.2.2"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -24,8 +24,8 @@ nix = { version = "0.30.1", features = [
     "mman",
     "ioctl",
 ] }
-xvc-protocol = { version = "0.2.1", path = "../xvc-protocol" }
-xvc-server = { version = "0.3.0", path = "../xvc-server" }
+xvc-protocol = { version = "0.2.2", path = "../xvc-protocol" }
+xvc-server = { version = "0.3.1", path = "../xvc-server" }
 clap-num = "1.2.0"
 
 [[bin]]

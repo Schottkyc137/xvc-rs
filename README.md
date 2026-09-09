@@ -57,10 +57,10 @@ Your PC reaches that device over the network:
 └─────────┘            └──────────────────────────┘         └────────┘
 ```
 
-Download the `xvc-server-usb` binary (the executable is named `xvc-usb`) from
-the [release page](https://github.com/Schottkyc137/xvc-rs/releases/latest) and start it on the lab device:
+Install the `xvc-server-usb` binary (the executable is named `xvc-usb`) on the lab device and start it:
 
 ```shell
+cargo install xvc-server-usb
 xvc-usb
 ```
 
@@ -77,7 +77,7 @@ This flow requires zero external hardware, but the FPGA cannot be reconfigured �
 └─────────┘            └───────────┘                   └────────────┘
 ```
 
-Download the `xvc-server-debugbridge` binary (the executable is named `xvc-bridge`) from the [release page](https://github.com/Schottkyc137/xvc-rs/releases/latest) and start it on the SoC:
+Download the `xvc-server-debugbridge` binary (the executable is named `xvc-bridge`) from the [release page](https://github.com/Schottkyc137/xvc-rs/releases?q=xvc-server-debugbridge&expanded=true) and start it on the SoC:
 
 ```shell
 xvc-bridge

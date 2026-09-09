@@ -2,8 +2,8 @@
 //!
 //! This module provides [`MessageDecoder`] and [`XvcInfoDecoder`], which implement
 //! [`tokio_util::codec::Decoder`] and can be used with [`tokio_util::codec::FramedRead`]
-//! to drive async XVC message parsing over a [`tokio::net::TcpStream`] (or any other
-//! [`tokio::io::AsyncRead`] source).
+//! to drive async XVC message parsing over a `tokio::net::TcpStream` (or any other
+//! `tokio::io::AsyncRead` source).
 //!
 //! Enable with the `tokio` feature flag:
 //!

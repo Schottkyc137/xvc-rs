@@ -7,7 +7,9 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 readme = "README.md"
-categories = ["api-bindings"]
+categories = ["network-programming", "hardware-support", "embedded"]
+keywords = ["jtag", "fpga", "xvc", "amd", "vivado"]
+homepage.workspace = true
 description = "Library for implementing Xilinx Virtual Cable (XVC) servers that handle JTAG communication with FPGA devices over network connections"
 
 [dependencies]

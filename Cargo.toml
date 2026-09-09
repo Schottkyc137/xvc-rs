@@ -23,3 +23,4 @@ authors = ["Lukas Scheller"]
 license = "MIT"
 rust-version = "1.91"
 repository = "https://github.com/Schottkyc137/xvc-rs"
+homepage = "https://github.com/Schottkyc137/xvc-rs"

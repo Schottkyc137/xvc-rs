@@ -13,7 +13,7 @@ This crate is part of the [`xvc-rs`](https://github.com/Schottkyc137/xvc-rs) pro
 
 ## Installation
 
-The target SoC often has no internet access, so a ready-to-run binary for AMD SoCs (aarch64 Linux) is available on the [releases page](https://github.com/Schottkyc137/xvc-rs/releases/latest).
+The target SoC often has no public internet access, so a ready-to-run binary for AMD SoCs (aarch64 Linux) is available on the [releases page](https://github.com/Schottkyc137/xvc-rs/releases?q=xvc-server-debugbridge&expanded=true).
 Download it, copy it to the SoC, and run it there.
 
 ### Alternative installations

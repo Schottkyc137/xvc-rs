@@ -29,3 +29,8 @@ jobs:
 
       - name: clippy
         run: cargo clippy --all-features -- -D warnings
+
+      - name: rustdoc
+        run: cargo doc --workspace --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings

@@ -1,5 +1,9 @@
 # xvc-rs: Xilinx Virtual Cable in Rust
 
+[![CI](https://github.com/Schottkyc137/xvc-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/Schottkyc137/xvc-rs/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE.txt)
+[![Rust 1.91+](https://img.shields.io/badge/rust-1.91%2B-orange.svg)](https://www.rust-lang.org)
+
 A Rust implementation of the [Xilinx Virtual Cable (XVC) 1.0 protocol](https://github.com/Xilinx/XilinxVirtualCable) for remote JTAG communication with FPGA devices over network connections.
 
 ## Disclaimer
@@ -32,11 +36,11 @@ protocol, shipped as both libraries and ready-to-run binaries:
 
 See the READMEs in the respective crates in this repository for more information:
 
-- [xvc-client](./xvc-client/README.md)
-- [xvc-protocol](./xvc-protocol/README.md)
-- [xvc-server](./xvc-server/README.md)
-- [xvc-server-debugbridge](./xvc-server-debugbridge/README.md)
-- [xvc-server-usb](./xvc-server-usb/README.md)
+- [xvc-client](./xvc-client/README.md) [![crates.io](https://img.shields.io/crates/v/xvc-client.svg)](https://crates.io/crates/xvc-client) [![docs.rs](https://img.shields.io/docsrs/xvc-client)](https://docs.rs/xvc-client)
+- [xvc-protocol](./xvc-protocol/README.md) [![crates.io](https://img.shields.io/crates/v/xvc-protocol.svg)](https://crates.io/crates/xvc-protocol) [![docs.rs](https://img.shields.io/docsrs/xvc-protocol)](https://docs.rs/xvc-protocol)
+- [xvc-server](./xvc-server/README.md) [![crates.io](https://img.shields.io/crates/v/xvc-server.svg)](https://crates.io/crates/xvc-server) [![docs.rs](https://img.shields.io/docsrs/xvc-server)](https://docs.rs/xvc-server)
+- [xvc-server-debugbridge](./xvc-server-debugbridge/README.md) [![crates.io](https://img.shields.io/crates/v/xvc-server-debugbridge.svg)](https://crates.io/crates/xvc-server-debugbridge)
+- [xvc-server-usb](./xvc-server-usb/README.md) [![crates.io](https://img.shields.io/crates/v/xvc-server-usb.svg)](https://crates.io/crates/xvc-server-usb)
 
 ## Quick Start
 
